@@ -1,5 +1,5 @@
-# GMI-PLANET
-### Graph-Based Analysis of Plasmid Evolution from `pling` Distance Outputs
+# GMI-PLANET 
+### Graph-Based Analysis of Plasmid Networks from `pling` Distance Outputs
 
 [![Status](https://img.shields.io/badge/status-active-success)](../../)
 [![Library](https://img.shields.io/badge/library-igraph-blue)](../../)
@@ -17,6 +17,7 @@
 - [Quick Start](#quick-start)
 - [Expected Outputs](#expected-outputs)
 - [Interpretation Guide](#interpretation-guide)
+- [Acknowledgements](#acknowledgements)
 - [License](#license)
 
 ---
@@ -97,6 +98,13 @@ pling_output/  # directory for `pling` distance outputs
 - High betweenness: likely inter-community bridge nodes
 - High closeness: nodes with high structural accessibility
 - Backbone signal: small set of high-centrality nodes sustaining global connectivity
+
+---
+
+## Acknowledgements
+Special thanks to the `pling` project and contributors for developing and openly sharing the tool that produces the structural distance outputs used as input in this analysis.
+
+- `pling` repository: https://github.com/iqbal-lab-org/pling
 
 ---
 
