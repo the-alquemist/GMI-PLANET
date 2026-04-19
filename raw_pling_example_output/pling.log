@@ -1,0 +1,31 @@
+pling version 3.0.1
+
+ ARGUMENTS 
+
+batch_size: 200
+bh_connectivity: 10
+bh_neighbours_edge_density: 0.2
+communities: /run/media/the_alquemist/1TB_drive/fcfm/redes_complejas/pling_output/containment/containment_communities
+dcj_dist_threshold: 4
+genomes_list: plasmids_2cproject/pling_input.txt
+identity_threshold: 80.0
+ilp_solver: GLPK
+integerisation: align
+length_threshold: 200
+output_dir: /run/media/the_alquemist/1TB_drive/fcfm/redes_complejas/pling_output
+output_type: both
+prefix: all_plasmids
+seq_containment_distance: 0.5
+small_subcommunity_size_threshold: 4
+topology: None
+visualisation: all
+
+
+ LOG 
+
+2026-04-11 14:46:55,830 [INFO]  Batching...
+2026-04-11 14:46:56,852 [INFO]  Completed batching.
+2026-04-11 14:46:56,852 [INFO]  Aligning, integerising, and building containment network...
+2026-04-11 14:48:53,333 [INFO]  Completed integerisation and containment network.
+2026-04-11 14:48:53,333 [INFO]  Calculating DCJ-Indel distance and clustering...
+2026-04-11 14:49:53,953 [INFO]  Completed distance calculations and clustering.
