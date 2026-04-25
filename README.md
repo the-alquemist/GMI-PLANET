@@ -102,10 +102,8 @@ pling_output/  # directory for `pling` distance outputs
 ---
 
 ## Acknowledgements
-Special thanks to the `pling` project and contributors for developing and openly sharing the tool that produces the structural distance outputs used as input in this analysis.
-
-- `pling` repository: https://github.com/iqbal-lab-org/pling
-
+- We thank the [`pling`](https://github.com/iqbal-lab-org/pling) project and its contributors for developing and openly sharing the tool used to generate the structural distance outputs that serve as input for this analysis.
+- We also acknowledge the [GMI Lab](https://github.com/GMI-Lab/) (Grupo de Microbiología Integrativa), Facultad de Ciencias, Universidad de Chile, particularly Camilo Berríos and Andrés Marcoleta, for providing sample datasets used to test and validate the software, as well as for their support and contributions.
 ---
 
 ## License
