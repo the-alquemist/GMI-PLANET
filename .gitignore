@@ -1,0 +1,47 @@
+# Snakemake workflow artifacts
+.snakemake/
+**/.snakemake/
+**/.snakemake_timestamp
+**/.snakemake_log/
+**/.snakemake_metadata
+**/.snakemake_incomplete
+
+# Generated example outputs
+raw_pling_example_output/
+
+# Python caches and virtual environments
+__pycache__/
+*.py[cod]
+*.pyd
+*.so
+*.egg-info/
+build/
+dist/
+pip-wheel-metadata/
+.eggs/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+.venv/
+venv/
+env/
+ENV/
+
+# Notebook checkpoints
+.ipynb_checkpoints/
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*.tmp
+*.log
+.vscode/
+.idea/
