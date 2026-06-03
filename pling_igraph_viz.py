@@ -1,56 +1,56 @@
 """
 pling_igraph_viz.py
 ===================
-Recreates pling's interactive community HTML visualisations as static
-high-resolution PNG figures using **igraph** for graph algorithms and
-**matplotlib** for rendering.
+Recreates pling community visualisations as static PNG figures using
+**igraph** for graph algorithms and **matplotlib** for rendering.
+
+Two figures are produced per community:
+  1. Full graph      – all plasmids including hub (connector) nodes
+  2. No-hub graph    – hub nodes and their edges removed; shows the
+                       direct within-subcommunity structure more clearly
+
+Both igraph.Graph objects are kept in memory with rich vertex / edge
+attributes so callers can run further graph-theoretic analyses on them
+(centrality, shortest paths, community detection, etc.).
 
 Background
 ----------
-pling (Plasmid Linking by Inference of Network Graphs) clusters plasmids into
-communities and subcommunities based on sequence similarity metrics:
-  - sd  (sequence distance)  – continuous [0, 1], lower = more similar
-  - td  (topological depth)  – integer hop-count in the plasmid graph
+pling clusters plasmids into communities / subcommunities based on:
+  sd  (sequence distance)  – continuous [0, 1], lower = more similar
+  td  (topological depth)  – integer hop-count in the plasmid graph
 
-Each community JSON file contains:
+Each community JSON contains:
   nodes  – plasmid IDs with a colour (subcommunity) and optional is_hub flag
-  edges  – pairs of plasmids with sd, td, and d_lbl ("sd / td" label)
+  edges  – plasmid pairs with sd, td, and d_lbl ("sd / td" display label)
 
-Layout strategy — three phases
--------------------------------
-A single global Fruchterman-Reingold (FR) run on 150+ nodes produces
-elongated, poorly-separated clusters because cross-community edges fight
-against tight intra-community structure.  We use a three-phase pipeline:
+Three-phase layout strategy
+---------------------------
+Phase 1 – GLOBAL FR
+    Full-graph Fruchterman-Reingold with strongly up-weighted intra-community
+    edges.  Gives correct macro topology (blob positions) at low cost.
 
-  Phase 1 – GLOBAL FR
-      Run FR on the full graph with heavily up-weighted intra-community edges.
-      This gives the correct macro topology (relative positions of blobs) even
-      if the internal structure of each blob is poor.
+Phase 2 – LOCAL FR / KK per subcommunity
+    Each subcommunity gets its own independent layout (Kamada-Kawai for
+    ≤ 15 nodes, FR otherwise) scaled by a density-adaptive radius, then
+    re-centred at its Phase-1 centroid plus a mild gravity pull toward its
+    external connection partners.  Nodes with no intra-cluster edges keep
+    their Phase-1 global positions.
 
-  Phase 2 – LOCAL FR / KK per subcommunity
-      For each multi-node subcommunity, extract its intra-cluster edges, run a
-      fresh local layout (Kamada-Kawai for small clusters ≤ 15 nodes, FR for
-      larger ones), apply a density-adaptive radius, then re-centre the result
-      at the Phase-1 centroid (optionally pulled slightly toward its partners).
-      Nodes with NO intra-cluster edges keep their Phase-1 global positions.
-
-  Phase 3 – CENTROID REPULSION
-      After local layouts are injected some cluster boundaries may overlap —
-      particularly when a small isolated cluster was pulled toward a hub that
-      already sits inside a large dense cluster.  We run an iterative
-      centroid-repulsion pass (like the repulsion term of FR, but at cluster
-      level) until all boundaries are separated by a minimum gap.  Crucially,
-      every node in a displaced cluster shifts by the same vector so the
-      internal clique structure is preserved perfectly.
+Phase 3 – CENTROID REPULSION (size-weighted)
+    Iteratively pushes apart overlapping cluster boundaries.  Forces are
+    SIZE-WEIGHTED so larger clusters absorb more displacement, preventing
+    the cascading-collision bug where resolving one large overlap shoves a
+    big cluster into a small isolated one.
 
 Usage
 -----
     python3 pling_igraph_viz.py \\
-        --community 0 \\
-        --json      community_0.json \\
-        --typing    typing.tsv \\
-        --out       community_0_igraph.png \\
-        --dpi       200
+        --community  0 \\
+        --json       community_0.json \\
+        --typing     typing.tsv \\
+        --out        community_0_igraph.png \\
+        --out-nohubs community_0_igraph_no_hubs.png \\
+        --dpi        200
 
 Dependencies
 ------------
@@ -65,13 +65,11 @@ import re
 from collections import defaultdict
 from pathlib import Path
 
-# igraph provides the graph layout algorithms (FR, Kamada-Kawai, etc.)
-import igraph as ig
-
+import igraph as ig          # graph data structure + layout algorithms
 import matplotlib
-matplotlib.use("Agg")           # non-interactive backend — needed for PNG output
+matplotlib.use("Agg")        # non-interactive backend — needed for PNG output
 import matplotlib.pyplot as plt
-import matplotlib.patheffects as pe   # white stroke behind labels for legibility
+import matplotlib.patheffects as pe   # white text stroke for legibility
 import numpy as np
 import pandas as pd
 
@@ -81,110 +79,204 @@ import pandas as pd
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments.
 
-    All paths default to the pling upload/output convention used in this
-    environment; override them when running on different data.
+    Returns a Namespace with:
+        community  (int)  – community index for legend labels
+        json       (str)  – path to the pling community JSON
+        typing     (str)  – path to typing.tsv
+        out_dir    (str)  – output directory where both PNGs will be written
+        dpi        (int)  – output resolution
     """
     p = argparse.ArgumentParser(
         description="Recreate pling community visualisations with igraph."
     )
-    p.add_argument("--community", type=int, default=0,
-                   help="Community index (used in legend labels)")
-    p.add_argument("--json",    default="/mnt/user-data/uploads/community_0.json",
-                   help="Path to the pling community JSON file")
-    p.add_argument("--typing",  default="/mnt/user-data/uploads/typing.tsv",
-                   help="Path to typing.tsv  (plasmid → subcommunity mapping)")
-    p.add_argument("--out",     default="/mnt/user-data/outputs/community_0_igraph.png",
-                   help="Output PNG file path")
-    p.add_argument("--dpi",     type=int, default=200,
-                   help="Output resolution in DPI")
+    p.add_argument("--community",  type=int, default=0)
+    p.add_argument("--json",       default="/mnt/user-data/uploads/community_0.json")
+    p.add_argument("--typing",     default="/mnt/user-data/uploads/typing.tsv")
+    p.add_argument("--out-dir",    required=True,
+                   help="Output directory where both full and no-hub PNGs will be written")
+    p.add_argument("--dpi",        type=int, default=200)
     return p.parse_args()
 
 
 # ── Utility ───────────────────────────────────────────────────────────────────
 
 def nat_key(s: str) -> list:
-    """Natural-sort key so 'Sub 10' sorts after 'Sub 9', not 'Sub 2'.
-
-    Splits the string into alternating text / integer chunks; integer chunks
-    are compared numerically rather than lexicographically.
-    """
+    """Natural-sort key: 'Sub 10' sorts after 'Sub 9', not before 'Sub 2'."""
     return [int(t) if t.isdigit() else t for t in re.split(r'(\d+)', s)]
 
 
-# ── Phase 1: global FR ────────────────────────────────────────────────────────
+# ── Graph construction ────────────────────────────────────────────────────────
 
-def build_global_graph(N: int, edge_list: list, edge_td: list,
-                       subcom_arr: np.ndarray) -> ig.Graph:
-    """Build the full graph with differentiated edge weights for Phase-1 FR.
+def build_pling_graph(raw_nodes: list, raw_edges: list,
+                      p2t: dict, color_to_sc: dict,
+                      exclude_hubs: bool = False) -> ig.Graph:
+    """Build a fully attributed igraph.Graph from pling JSON data.
+
+    This is the single source of truth for graph construction.  Both the
+    full graph and the no-hub graph are created by this function; the only
+    difference is the ``exclude_hubs`` flag.
+
+    Vertex attributes set on the returned graph
+    -------------------------------------------
+    name    (str)   plasmid ID string
+    color   (str)   matplotlib colour name — one colour per subcommunity
+    is_hub  (bool)  True for hub connector nodes
+    subcom  (str)   subcommunity label (from typing.tsv or colour fallback)
+
+    Edge attributes set on the returned graph
+    -----------------------------------------
+    sd   (float)  sequence distance [0, 1]
+    td   (int)    topological depth (hop count)
+    lbl  (str)    display label used in the pling HTML ("sd / td")
+
+    Parameters
+    ----------
+    raw_nodes    : list of node dicts from JSON["elements"]["nodes"]
+    raw_edges    : list of edge dicts from JSON["elements"]["edges"]
+    p2t          : dict  plasmid_id → subcommunity label (from typing.tsv)
+    color_to_sc  : dict  colour_string → subcommunity label (fallback)
+    exclude_hubs : if True, hub nodes and ALL their incident edges are removed
+
+    Returns
+    -------
+    igraph.Graph  – undirected, with vertex and edge attributes as above
+    """
+
+    def get_sc(nid: str, is_hub: bool) -> str:
+        """Resolve subcommunity label with three-level fallback."""
+        if nid in p2t:   return p2t[nid]          # typing.tsv  (primary)
+        if is_hub:        return "hub"             # hub connector
+        return color_to_sc.get(                    # colour → subcom (fallback)
+            next((n["data"].get("color", "") for n in raw_nodes
+                  if n["data"]["id"] == nid), ""),
+            "unknown"
+        )
+
+    # ── Filter nodes ──────────────────────────────────────────────────────────
+    # When exclude_hubs=True we drop hub nodes entirely so the returned graph
+    # has no hub vertices at all — callers can be sure g.vs["is_hub"] is all
+    # False in that case.
+    filtered_nodes = [
+        n for n in raw_nodes
+        if not (exclude_hubs and n["data"].get("is_hub", False))
+    ]
+    node_ids  = [n["data"]["id"] for n in filtered_nodes]
+    node_idx  = {nid: i for i, nid in enumerate(node_ids)}  # id → vertex index
+
+    # ── Build igraph vertex set ───────────────────────────────────────────────
+    g = ig.Graph(directed=False)
+    g.add_vertices(len(node_ids))
+
+    colors  = [n["data"].get("color",  "steelblue")      for n in filtered_nodes]
+    is_hubs = [bool(n["data"].get("is_hub", False))       for n in filtered_nodes]
+    subcoms = [get_sc(n["data"]["id"], bool(n["data"].get("is_hub", False)))
+               for n in filtered_nodes]
+
+    g.vs["name"]   = node_ids
+    g.vs["color"]  = colors
+    g.vs["is_hub"] = is_hubs
+    g.vs["subcom"] = subcoms
+
+    # ── Build igraph edge set ─────────────────────────────────────────────────
+    # Drop edges whose source or target was removed (hub exclusion).
+    edge_list, edge_sd, edge_td, edge_lbl = [], [], [], []
+    for e in raw_edges:
+        d = e["data"]
+        s, t = d["source"], d["target"]
+        if s in node_idx and t in node_idx:
+            edge_list.append((node_idx[s], node_idx[t]))
+            edge_sd.append(float(d.get("sd",    0.0)))
+            edge_td.append(int(  d.get("td",    1  )))
+            edge_lbl.append(     d.get("d_lbl", ""  ))
+
+    g.add_edges(edge_list)
+    g.es["sd"]  = edge_sd
+    g.es["td"]  = edge_td
+    g.es["lbl"] = edge_lbl
+
+    return g
+
+
+# ── Phase 1 ───────────────────────────────────────────────────────────────────
+
+def global_fr_layout(g: ig.Graph, subcom_arr: np.ndarray) -> np.ndarray:
+    """Phase-1 global Fruchterman-Reingold layout.
 
     Edge-weight design
     ------------------
-    FR uses edge weights as spring stiffnesses.  We exploit this to encode
-    community structure directly into the physics:
+    Intra-community edges get high weights (tight springs) so nodes in the
+    same subcommunity cluster together.  Inter-community edges get low weights
+    so they preserve global topology without distorting local structure.
+    td (topological depth) scales each weight inversely: closer plasmids =
+    stronger spring.
 
-        intra-community  →  weight = max(8, 20/td)   strong spring, tight cluster
-        inter-community  →  weight = max(0.1, 0.5/td) weak spring, loose coupling
+    Parameters
+    ----------
+    g           : igraph.Graph (the graph to lay out)
+    subcom_arr  : np.ndarray of subcommunity labels, one per vertex (same order)
 
-    td (topological depth) acts as a distance proxy: smaller td = more similar
-    plasmids = should sit closer together, so the weight is *inversely*
-    proportional to td.
-
-    Returns an igraph.Graph with a "weight" edge attribute.
+    Returns
+    -------
+    np.ndarray (N, 2) – raw FR coordinates
     """
-    g = ig.Graph(directed=False)
-    g.add_vertices(N)
-
     weights = []
-    for (u, v), td in zip(edge_list, edge_td):
+    for e in g.es:
+        u, v = e.source, e.target
+        td   = e["td"]
         same = subcom_arr[u] == subcom_arr[v]
         weights.append(
             max(8.0, 20.0 / max(td, 0.1)) if same
             else max(0.1,  0.5 / max(td, 0.1))
         )
 
-    g.add_edges(edge_list)
-    g.es["weight"] = weights
-    return g
+    layout = g.layout_fruchterman_reingold(
+        weights  = weights,
+        niter    = 3000,      # more iterations → stabler convergence
+        grid     = "nogrid",  # exact repulsion (slower, higher quality)
+    )
+    return np.array(layout.coords)
 
 
 # ── Phase 2 helpers ───────────────────────────────────────────────────────────
 
-def local_layout_coords(active: list, edge_list: list,
-                        edge_td: list, n_act: int) -> np.ndarray | None:
-    """Compute a unit-normalised local layout for one subcommunity.
+def local_layout_coords(active: list, g: ig.Graph,
+                        n_act: int) -> np.ndarray | None:
+    """Phase-2 local layout for one subcommunity.
 
     Algorithm choice
     ----------------
-    Kamada-Kawai (KK) minimises a spring energy based on graph-theoretic
-    shortest paths.  For small, sparse graphs it produces more organic,
-    less elongated shapes than FR.
+    Kamada-Kawai (KK) for small clusters (≤ 15 nodes): minimises spring
+    energy based on graph-theoretic shortest paths, producing more organic
+    shapes than FR for sparse/small graphs.
 
-    FR is used for larger clusters (> 15 nodes) where KK becomes slow and
-    where there are enough nodes for the force-balance to look good.
+    Fruchterman-Reingold for larger clusters: scales better and respects
+    edge weights more clearly at higher node counts.
 
     Auto-rotation
     -------------
-    Chain-like sub-graphs (two cliques connected by a long-distance edge)
-    often land in a horizontal strip because FR/KK have no preferred axis.
-    We detect layouts with aspect ratio > 1.8 and rotate 90° so the chain
-    runs vertically — this looks far better in the full-community view.
+    Chain-like sub-graphs (two cliques joined by a long-distance edge) tend
+    to be laid out horizontally by both algorithms.  We detect layouts with
+    aspect ratio > 1.8 and rotate 90° so they run vertically instead.
 
     Returns
     -------
-    np.ndarray (n_act, 2) centred at origin with max radius = 1.0,
-    or None if there are no intra-cluster edges to layout.
+    np.ndarray (n_act, 2) centred at origin, normalised to unit max-radius,
+    or None when no intra-cluster edges exist.
     """
+    # Build a subgraph containing only the active nodes and intra-cluster edges
     local_map = {v: i for i, v in enumerate(active)}
 
     lg = ig.Graph(directed=False)
     lg.add_vertices(n_act)
 
     loc_edges, loc_w = [], []
-    for (u, v), td in zip(edge_list, edge_td):
+    for e in g.es:
+        u, v = e.source, e.target
         if u in local_map and v in local_map:
             loc_edges.append((local_map[u], local_map[v]))
-            # Stronger weight for closer plasmids → tighter FR/KK placement
-            loc_w.append(max(1.0, 8.0 / max(td, 0.1)))
+            # Higher weight = shorter spring = nodes pulled closer together.
+            # td=0 (near-identical sequence) → very strong; td=4 → gentle.
+            loc_w.append(max(1.0, 8.0 / max(e["td"], 0.1)))
 
     lg.add_edges(loc_edges)
     if lg.ecount() == 0:
@@ -198,14 +290,13 @@ def local_layout_coords(active: list, edge_list: list,
         )
 
     lc = np.array(layout.coords)
-    lc -= lc.mean(axis=0)
+    lc -= lc.mean(axis=0)        # centre at origin
 
-    # Normalise to unit radius so the caller controls the physical scale
     r = np.max(np.linalg.norm(lc, axis=1))
     if r > 0:
-        lc /= r
+        lc /= r                  # normalise to unit max-radius
 
-    # Auto-rotate: if significantly wider than tall, flip to vertical
+    # Auto-rotate: if width > 1.8 × height, rotate 90° to make it vertical
     sx = lc[:, 0].max() - lc[:, 0].min()
     sy = lc[:, 1].max() - lc[:, 1].min()
     if sx > sy * 1.8:
@@ -220,78 +311,76 @@ def density_adaptive_scale(n_act: int, n_int: int,
 
     Why density-adaptive?
     ---------------------
-    FR naturally compresses dense graphs (many springs pulling nodes together)
-    and expands sparse ones.  Applying the same scale factor to both would make
-    sparse clusters look over-blown relative to dense ones.
-
-    The formula linearly maps density [0, 1] to a scale factor [0.38, 0.62]:
+    FR naturally compresses dense graphs (many springs) and spreads sparse
+    ones.  A fixed scale factor would make sparse clusters look over-expanded
+    relative to dense ones.  We map density linearly to a scale factor:
 
         scale_f = clamp(0.38 + 0.28 × density, max=0.62)
 
-    Calibration against community_0 clusters:
-        fuchsia   density=0.85 → scale_f=0.62  ← visually correct, no change
-        orange    density=0.26 → scale_f=0.45  ← tighter than naïve 0.62
+    Calibrated on community_0:
+        fuchsia   density=0.85 → scale_f=0.62  (visually correct)
+        orange    density=0.26 → scale_f=0.45  (tighter, avoids bloat)
         indianred density=0.34 → scale_f=0.48
-        aqua      density=0.46 → scale_f≈0.51, then capped at 0.28 (small n)
+        aqua      density=0.46 → scale_f=0.51, capped at 0.28 (small n)
 
-    The returned value is the physical max-node distance from cluster centre.
+    Returns the physical max-node distance from the cluster centre.
     """
     max_edges = n_act * (n_act - 1) / 2
     density   = n_int / max_edges if max_edges > 0 else 0.0
 
     scale_f = min(0.38 + 0.28 * density, 0.62)
     if n_act <= 12:
-        scale_f = min(scale_f, 0.28)   # extra cap: small clusters stay compact
+        scale_f = min(scale_f, 0.28)   # small clusters: extra compact cap
 
     return ref_unit * math.sqrt(n_act) * scale_f
 
 
-# ── Phase 3: centroid repulsion ───────────────────────────────────────────────
+# ── Phase 3 ───────────────────────────────────────────────────────────────────
 
 def resolve_cluster_overlaps(final: np.ndarray,
                               sc_members: dict,
                               has_intra: set,
                               ref_unit: float,
-                              min_gap_factor: float = 0.5,
+                              min_gap_factor: float = 0.3,
                               max_iters: int = 200) -> np.ndarray:
-    """Push apart overlapping cluster boundaries while preserving internal structure.
+    """Phase-3 size-weighted centroid repulsion.
 
-    Why is this needed?
-    -------------------
-    After Phase 2, the density-adaptive radius of each cluster is known.
-    A small isolated cluster (e.g. aqua, radius ≈ 1.7 ref_units) pulled toward
-    its hub may end up inside a large dense cluster (e.g. fuchsia, radius ≈ 6.7
-    ref_units) because the hub position IS inside that larger cluster.
-    Reducing the pull alone cannot fix this: even at pull = 0, the aqua global
-    FR centroid may already be within fuchsia's territory.
+    Why size-weighted?
+    ------------------
+    Equal (50/50) repulsion caused a cascading bug: resolving the large
+    orange↔fuchsia overlap (7 raw units) pushed fuchsia into aqua's space,
+    which then pushed aqua to the canvas edge.
+
+    With SIZE-WEIGHTED forces (larger cluster = more displacement, like
+    higher inertial mass in Newtonian mechanics) orange absorbs ~69% of the
+    push, fuchsia only ~31%, and fuchsia never reaches aqua.
 
     Algorithm
     ---------
-    Mirrors the repulsion term of FR applied at cluster level:
-      for every pair (i, j):
+    For each overlapping pair (i, j):
         required = radius_i + radius_j + min_gap
-        if dist(centroid_i, centroid_j) < required:
-          push both centroids apart along the line between them
-    Repeat until all pairs satisfy the constraint or max_iters is reached.
-
-    All nodes in a displaced cluster shift by the same rigid vector so the
-    local clique structure computed in Phase 2 is perfectly preserved.
+        push     = required - dist(centroid_i, centroid_j)
+        centroid_i += direction × push × (n_i / (n_i + n_j))
+        centroid_j -= direction × push × (n_j / (n_i + n_j))
+    Repeat until all pairs are satisfied or max_iters is reached.
+    Every node in a displaced cluster shifts by the same rigid vector so
+    the internal clique structure from Phase 2 is perfectly preserved.
 
     Parameters
     ----------
-    final          : coordinate array (N, 2), modified in-place and returned
-    sc_members     : subcommunity → list of global node indices
-    has_intra      : set of node indices with at least one intra-cluster edge
+    final          : coordinate array (N, 2), modified in-place
+    sc_members     : subcommunity label → list of global node indices
+    has_intra      : set of node indices with ≥ 1 intra-cluster edge
     ref_unit       : global reference length (total_span / sqrt(N))
     min_gap_factor : minimum boundary gap = min_gap_factor × ref_unit
     max_iters      : safety cap on repulsion iterations
     """
     min_gap = min_gap_factor * ref_unit
 
-    # Collect only subcommunities with enough active nodes to have a real radius
-    active_scs: list   = []
-    centroids:  dict   = {}
-    radii:      dict   = {}
+    # Collect clusters with enough active nodes to have a meaningful radius
+    active_scs: list = []
+    centroids:  dict = {}
+    radii:      dict = {}
 
     for sc, mem in sc_members.items():
         active = [i for i in mem if i in has_intra]
@@ -316,25 +405,20 @@ def resolve_cluster_overlaps(final: np.ndarray,
                 if dist >= required or dist < 1e-9:
                     continue
 
-                # Overlap: push clusters apart with SIZE-WEIGHTED forces.
-                # Larger clusters absorb more displacement (analogous to higher
-                # inertial mass), so big clusters move more while small isolated
-                # clusters stay near their natural positions.  This prevents the
-                # cascade where fixing one large-large overlap shoves a big cluster
-                # into a small nearby cluster, which then needs its own repulsion.
+                # Size-weighted push: larger cluster moves more
                 any_overlap = True
-                direction = (ci - cj) / dist
-                push      = required - dist          # full separation needed
-                ni        = len(sc_members.get(sci, [0]))
-                nj        = len(sc_members.get(scj, [0]))
-                total_n   = max(ni + nj, 1)
+                direction  = (ci - cj) / dist
+                push       = required - dist
+                ni = len(sc_members.get(sci, [0]))
+                nj = len(sc_members.get(scj, [0]))
+                total_n = max(ni + nj, 1)
                 centroids[sci] += direction * push * (ni / total_n)
                 centroids[scj] -= direction * push * (nj / total_n)
 
         if not any_overlap:
-            break   # all boundaries satisfied — done
+            break   # all boundaries satisfied
 
-    # Apply centroid shifts: every node in the cluster moves by the same delta
+    # Apply centroid shifts rigidly — all nodes in a cluster move together
     for sc in active_scs:
         mem    = sc_members[sc]
         active = [i for i in mem if i in has_intra]
@@ -342,65 +426,59 @@ def resolve_cluster_overlaps(final: np.ndarray,
             continue
         old_c = final[active].mean(axis=0)
         shift = centroids[sc] - old_c
-        # Shift ALL members (active + passive) so isolated nodes follow their cluster
-        for gi in mem:
+        for gi in mem:     # shift ALL members (active + passive)
             final[gi] += shift
 
     return final
 
 
-# ── Master layout ─────────────────────────────────────────────────────────────
+# ── Master layout function ────────────────────────────────────────────────────
 
-def hybrid_layout(node_ids: list, node_subcom: dict,
-                  edge_list: list, edge_td: list,
-                  seed: int = 42) -> np.ndarray:
-    """Three-phase hierarchical layout for a pling community graph.
+def hybrid_layout(g: ig.Graph, seed: int = 42) -> np.ndarray:
+    """Three-phase hierarchical layout for a pling community (sub)graph.
+
+    Accepts any igraph.Graph that has the vertex attributes set by
+    ``build_pling_graph`` (name, color, is_hub, subcom) and edge attributes
+    (sd, td, lbl).  Works identically for the full graph and the no-hub graph.
 
     Parameters
     ----------
-    node_ids    : ordered list of plasmid ID strings
-    node_subcom : plasmid ID → subcommunity label
-    edge_list   : list of (u, v) integer index pairs (0-indexed)
-    edge_td     : td integer per edge
-    seed        : RNG seed for reproducibility
+    g    : igraph.Graph produced by build_pling_graph()
+    seed : RNG seed for reproducibility
 
     Returns
     -------
-    np.ndarray (N, 2) — final node coordinates for matplotlib.
-    Y is flipped (positive = down) to match the pling HTML orientation.
+    np.ndarray (N, 2) – final node coordinates for matplotlib.
+    Y-axis is flipped (positive = down) to match the pling HTML orientation.
     """
     np.random.seed(seed)
     random.seed(seed)
 
-    N          = len(node_ids)
-    subcom_arr = np.array([node_subcom[n] for n in node_ids])
+    N          = g.vcount()
+    subcom_arr = np.array(g.vs["subcom"])
 
-    # ── Phase 1 ───────────────────────────────────────────────────────────────
-    g_global   = build_global_graph(N, edge_list, edge_td, subcom_arr)
-    glo_layout = g_global.layout_fruchterman_reingold(
-        weights  = g_global.es["weight"],
-        niter    = 3000,      # more iterations → stabler convergence
-        grid     = "nogrid",  # exact repulsion (slower, better quality)
-    )
-    glo = np.array(glo_layout.coords)   # shape (N, 2)
+    # ── Phase 1: global FR ────────────────────────────────────────────────────
+    glo = global_fr_layout(g, subcom_arr)   # shape (N, 2)
 
     # ref_unit = "average inter-node spacing" in the global layout.
-    # Anchors all local radii to a consistent physical scale.
-    total_span = max(glo[:, 0].max() - glo[:, 0].min(),
-                     glo[:, 1].max() - glo[:, 1].min())
-    ref_unit   = total_span / math.sqrt(N)
+    # All local radii are expressed as multiples of ref_unit so that clusters
+    # have consistent visual density regardless of total graph size.
+    span_x   = glo[:, 0].max() - glo[:, 0].min()
+    span_y   = glo[:, 1].max() - glo[:, 1].min()
+    ref_unit = max(span_x, span_y) / math.sqrt(N)
 
-    graph_centroid = glo.mean(axis=0)
+    graph_centroid = glo.mean(axis=0)   # overall centre of mass
 
     # ── Per-subcommunity statistics ───────────────────────────────────────────
     sc_members   : dict = defaultdict(list)
-    sc_int_count : dict = defaultdict(int)
-    sc_ext_count : dict = defaultdict(int)
+    sc_int_count : dict = defaultdict(int)   # intra-cluster edge count
+    sc_ext_count : dict = defaultdict(int)   # inter-cluster edge count
 
     for i, sc in enumerate(subcom_arr):
         sc_members[sc].append(i)
 
-    for (u, v) in edge_list:
+    for e in g.es:
+        u, v = e.source, e.target
         su, sv = subcom_arr[u], subcom_arr[v]
         if su == sv:
             sc_int_count[su] += 1
@@ -409,13 +487,14 @@ def hybrid_layout(node_ids: list, node_subcom: dict,
             sc_ext_count[sv] += 1
 
     # Mean position of each cluster's external partners in the global layout.
-    # Pulling toward partners is more topologically meaningful than pulling
-    # toward the overall graph centroid — isolated clusters land near their
-    # actual connection point in the graph.
+    # Pulling toward partners (rather than the overall centroid) gives more
+    # topologically meaningful placement: isolated clusters land near their
+    # actual connection point rather than the graph's geometric centre.
     sc_partner_pos: dict = {}
     for sc in sc_members:
         partners = []
-        for (u, v) in edge_list:
+        for e in g.es:
+            u, v = e.source, e.target
             su, sv = subcom_arr[u], subcom_arr[v]
             if su == sc and sv != sc:
                 partners.append(glo[v])
@@ -424,141 +503,106 @@ def hybrid_layout(node_ids: list, node_subcom: dict,
         sc_partner_pos[sc] = (np.mean(partners, axis=0)
                               if partners else graph_centroid)
 
-    # Nodes WITH intra-cluster edges participate in local FR/KK.
-    # Nodes with only external edges (e.g. a plasmid in a cluster that only
-    # connects to hub nodes) keep their Phase-1 position unchanged.
+    # Nodes WITH at least one intra-cluster edge participate in local Phase-2
+    # layout.  Nodes with ONLY external edges keep their Phase-1 position —
+    # they are "passive" members that trail their cluster without distorting
+    # the local FR/KK result.
     has_intra: set = set()
-    for (u, v) in edge_list:
+    for e in g.es:
+        u, v = e.source, e.target
         if subcom_arr[u] == subcom_arr[v]:
             has_intra.add(u)
             has_intra.add(v)
 
-    # ── Phase 2 ───────────────────────────────────────────────────────────────
+    # ── Phase 2: per-subcommunity local layouts ───────────────────────────────
     final = glo.copy()
 
     for sc, mem in sc_members.items():
         active = [i for i in mem if i in has_intra]
         n_act  = len(active)
         if n_act < 3:
-            continue   # singletons / pairs: global position is fine
+            continue   # singletons / pairs: Phase-1 position is adequate
 
         raw_centroid = glo[active].mean(axis=0)
         ext          = sc_ext_count.get(sc, 0)
         target       = sc_partner_pos[sc]
 
-        # Gravity pull: isolated clusters (low ext) pulled toward their partner.
-        # Pull is deliberately modest (0.25) because Phase 3 will handle any
-        # remaining overlap — a large pull here is the root cause of the
-        # aqua-into-fuchsia collision seen in earlier versions.
+        # Gravity pull: moves the cluster centroid toward its external partners.
+        # Pull is modest (0.25) — Phase 3 handles residual overlaps so we
+        # don't need aggressive pull (which caused the aqua↔fuchsia collision).
         isolation = 1.0 / (1.0 + ext * 0.10)
         centroid  = raw_centroid + 0.25 * isolation * (target - raw_centroid)
 
-        lc = local_layout_coords(active, edge_list, edge_td, n_act)
+        lc = local_layout_coords(active, g, n_act)
         if lc is None:
             continue
 
         local_radius = density_adaptive_scale(
             n_act, sc_int_count.get(sc, 0), ref_unit
         )
-        lc *= local_radius
+        lc *= local_radius   # lc is unit-normalised from local_layout_coords()
 
         for li, gi in enumerate(active):
             final[gi] = centroid + lc[li]
+        # passive nodes already sit at glo[gi] — no change needed
 
-    # ── Phase 3 ───────────────────────────────────────────────────────────────
-    # Iteratively push apart any cluster boundaries that still overlap after
-    # Phase 2.  min_gap_factor=0.5 ensures at least half a ref_unit of white
-    # space between every pair of cluster boundaries.
+    # ── Phase 3: centroid repulsion ───────────────────────────────────────────
     final = resolve_cluster_overlaps(
         final, sc_members, has_intra,
         ref_unit       = ref_unit,
-        min_gap_factor = 0.3,
+        min_gap_factor = 0.3,   # gap = 0.3 × ref_unit between cluster boundaries
         max_iters      = 200,
     )
 
-    final[:, 1] = -final[:, 1]   # flip y: screen coords (y-down) vs maths (y-up)
+    final[:, 1] = -final[:, 1]   # flip y: igraph uses y-up, screen uses y-down
     return final
 
 
-# ── Main ─────────────────────────────────────────────────────────────────────
+# ── Rendering ─────────────────────────────────────────────────────────────────
 
-def main() -> None:
-    """Load pling data, run the three-phase layout, and render to PNG."""
-    args = parse_args()
+def render_figure(g: ig.Graph, coords: np.ndarray,
+                  community_idx: int, title_suffix: str,
+                  out_path: str, dpi: int = 200) -> None:
+    """Render one pling-style network figure to a PNG file.
 
-    # ── Load data ─────────────────────────────────────────────────────────────
-    with open(args.json) as fh:
-        raw = json.load(fh)
-    raw_nodes = raw["elements"]["nodes"]
-    raw_edges = raw["elements"]["edges"]
+    Draws edges, then nodes (circles for regular, stars for hubs), then labels.
+    Matches the visual style of the pling HTML output.
 
-    typing = pd.read_csv(args.typing, sep="\t")
-    p2t    = dict(zip(typing["plasmid"], typing["type"]))
+    Parameters
+    ----------
+    g             : igraph.Graph (full or no-hub) with all vertex/edge attrs
+    coords        : np.ndarray (N, 2) from hybrid_layout()
+    community_idx : community index — used in the title and legend header
+    title_suffix  : appended to the figure title, e.g. "(no hub nodes)"
+    out_path      : output PNG file path
+    dpi           : output resolution
+    """
+    N = g.vcount()
+    subcom_arr = np.array(g.vs["subcom"])
+    sc_sizes   = {sc: int(np.sum(subcom_arr == sc))
+                  for sc in np.unique(subcom_arr)}
 
-    # ── Node attributes ───────────────────────────────────────────────────────
-    node_ids    = [n["data"]["id"] for n in raw_nodes]
+    td_vals = g.es["td"] if g.ecount() > 0 else [1]
+    td_max  = max(td_vals)
 
-    # Colour is assigned by pling per subcommunity (one colour = one subcommunity)
-    node_color  = {n["data"]["id"]: n["data"].get("color", "steelblue")
-                   for n in raw_nodes}
-
-    # Hub nodes bridge subcommunities; pling marks them with is_hub=True
-    # and draws them as stars — we replicate that here.
-    node_is_hub = {n["data"]["id"]: bool(n["data"].get("is_hub", False))
-                   for n in raw_nodes}
-
-    # Fallback colour→subcommunity map for nodes absent from typing.tsv
-    # (hub nodes and any unclassified plasmids)
-    color_to_sc: dict = {}
-    for pid, sc in p2t.items():
-        if pid in node_color:
-            color_to_sc[node_color[pid]] = sc
-
-    def get_sc(nid: str) -> str:
-        """Resolve subcommunity label with three-level fallback."""
-        if nid in p2t:            return p2t[nid]        # typing.tsv (primary)
-        if node_is_hub.get(nid):  return "hub"           # hub connector node
-        return color_to_sc.get(node_color.get(nid, ""), "unknown")
-
-    node_subcom = {nid: get_sc(nid) for nid in node_ids}
-    node_idx    = {nid: i for i, nid in enumerate(node_ids)}
-    subcom_arr  = np.array([node_subcom[n] for n in node_ids])
-    sc_sizes    = {sc: int(np.sum(subcom_arr == sc))
-                   for sc in np.unique(subcom_arr)}
-
-    # ── Edge parsing ──────────────────────────────────────────────────────────
-    edge_list, edge_sd, edge_td, edge_lbl = [], [], [], []
-    for e in raw_edges:
-        d = e["data"]
-        s, t = d["source"], d["target"]
-        if s in node_idx and t in node_idx:
-            edge_list.append((node_idx[s], node_idx[t]))
-            edge_sd.append(float(d.get("sd",    0.0)))
-            edge_td.append(int(  d.get("td",    1  )))
-            edge_lbl.append(     d.get("d_lbl", ""  ))
-
-    print(f"Community {args.community}: "
-          f"{len(node_ids)} nodes, {len(edge_list)} edges")
-
-    # ── Three-phase layout ────────────────────────────────────────────────────
-    coords = hybrid_layout(node_ids, node_subcom, edge_list, edge_td, seed=42)
-
-    # ── Figure ────────────────────────────────────────────────────────────────
     fig, ax = plt.subplots(figsize=(26, 22))
     ax.set_aspect("equal")
     ax.axis("off")
     fig.patch.set_facecolor("white")
-    td_max = max(edge_td) if edge_td else 1
 
     # ── Edges ─────────────────────────────────────────────────────────────────
-    for (u, v), sd, td, lbl in zip(edge_list, edge_sd, edge_td, edge_lbl):
+    for e in g.es:
+        u, v = e.source, e.target
         x0, y0 = coords[u]
         x1, y1 = coords[v]
-        same  = subcom_arr[u] == subcom_arr[v]
-        n_sc  = sc_sizes.get(subcom_arr[u], 1)
+        td   = e["td"]
+        sd   = e["sd"]
+        lbl  = e["lbl"]
+        same = subcom_arr[u] == subcom_arr[v]
+        n_sc = sc_sizes.get(subcom_arr[u], 1)
 
         if same:
-            # Intra-cluster: slightly darker/thicker so clique structure shows
+            # Intra-cluster: darker/thicker so internal clique structure shows
             alpha, lw, col = 0.38, 0.75, "dimgray"
         else:
             # Inter-cluster: faint and thin — topology hint, not dominant
@@ -569,8 +613,8 @@ def main() -> None:
                 color=col, lw=lw, alpha=alpha,
                 zorder=1, solid_capstyle="round")
 
-        # Edge labels (sd / td) shown selectively to avoid clutter:
-        # always in small clusters (≤ 30 nodes), sparingly in large ones.
+        # Edge labels (sd / td): shown for all edges in small clusters,
+        # selectively for large clusters to avoid clutter.
         if lbl:
             show = (same and (n_sc <= 30 or (td <= 4 and sd > 0))) or \
                    (not same and td <= 4 and not (sd == 0.0 and td == 1))
@@ -583,46 +627,56 @@ def main() -> None:
                         ])
 
     # ── Nodes ─────────────────────────────────────────────────────────────────
-    hub_idx    = [i for i, n in enumerate(node_ids) if     node_is_hub[n]]
-    circle_idx = [i for i, n in enumerate(node_ids) if not node_is_hub[n]]
+    is_hubs = g.vs["is_hub"]
+    colors  = g.vs["color"]
+
+    hub_idx    = [i for i in range(N) if     is_hubs[i]]
+    circle_idx = [i for i in range(N) if not is_hubs[i]]
 
     # Regular nodes → filled circles
-    ax.scatter(coords[circle_idx, 0], coords[circle_idx, 1],
-               s=85, c=[node_color[node_ids[i]] for i in circle_idx],
-               edgecolors="white", linewidths=0.7, zorder=4, alpha=0.93)
+    if circle_idx:
+        ax.scatter(coords[circle_idx, 0], coords[circle_idx, 1],
+                   s=85,
+                   c=[colors[i] for i in circle_idx],
+                   edgecolors="white", linewidths=0.7,
+                   zorder=4, alpha=0.93)
 
     # Hub nodes → larger stars with black outline (matches pling HTML style)
-    ax.scatter(coords[hub_idx, 0], coords[hub_idx, 1],
-               s=320, marker="*",
-               c=[node_color[node_ids[i]] for i in hub_idx],
-               edgecolors="black", linewidths=1.1, zorder=5)
+    if hub_idx:
+        ax.scatter(coords[hub_idx, 0], coords[hub_idx, 1],
+                   s=320, marker="*",
+                   c=[colors[i] for i in hub_idx],
+                   edgecolors="black", linewidths=1.1,
+                   zorder=5)
 
     # ── Labels ────────────────────────────────────────────────────────────────
-    for i, nid in enumerate(node_ids):
+    names = g.vs["name"]
+    for i in range(N):
         x, y = coords[i]
-        ax.text(x, y, nid,
-                fontsize=7.2 if node_is_hub[nid] else 5.5,
-                fontweight="bold" if node_is_hub[nid] else "normal",
-                color=node_color[nid],
+        ax.text(x, y, names[i],
+                fontsize=7.2 if is_hubs[i] else 5.5,
+                fontweight="bold" if is_hubs[i] else "normal",
+                color=colors[i],
                 ha="center", va="bottom", zorder=6,
                 path_effects=[pe.withStroke(linewidth=1.9, foreground="white")])
 
     # ── Legend ────────────────────────────────────────────────────────────────
     sc_col: dict = {}
-    for nid in node_ids:
-        sc = node_subcom[nid]
+    for i in range(N):
+        sc = subcom_arr[i]
         if sc not in sc_col:
-            sc_col[sc] = node_color[nid]
+            sc_col[sc] = colors[i]
 
     def leg_label(sc: str) -> str:
-        sc = sc.replace(f"community_{args.community}_subcommunity_", "Sub ")
-        sc = sc.replace("hub", "Hub (connector)")
+        sc = sc.replace(f"community_{community_idx}_subcommunity_", "Sub ")
+        sc = sc.replace("hub",     "Hub (connector)")
         sc = sc.replace("unknown", "Unclassified")
         return sc
 
     handles = [
         plt.Line2D([0], [0],
-                   marker="*" if sc == "hub" else "o", color="w",
+                   marker="*" if sc == "hub" else "o",
+                   color="w",
                    markerfacecolor=sc_col[sc],
                    markeredgecolor="black" if sc == "hub" else sc_col[sc],
                    markersize=10 if sc == "hub" else 8,
@@ -630,23 +684,126 @@ def main() -> None:
         for sc in sorted(sc_col, key=nat_key)
     ]
     leg = ax.legend(handles=handles,
-                    title=f"Community {args.community} – subcommunities",
+                    title=f"Community {community_idx} – subcommunities",
                     title_fontsize=9, fontsize=7.5,
                     loc="lower left", frameon=True, framealpha=0.88,
-                    ncol=2, borderpad=0.9, handletextpad=0.5, labelspacing=0.4)
+                    ncol=2, borderpad=0.9, handletextpad=0.5,
+                    labelspacing=0.4)
     leg.get_frame().set_edgecolor("#aaaaaa")
 
     ax.set_title(
-        f"Community {args.community} – Plasmid relatedness network  |  "
+        f"Community {community_idx} – Plasmid relatedness network  "
+        f"{title_suffix} |  "
         f"Three-phase hierarchical layout  |  "
-        f"{len(node_ids)} plasmids · {len(edge_list)} edges",
-        fontsize=13, pad=12, fontweight="bold")
+        f"{N} plasmids · {g.ecount()} edges",
+        fontsize=13, pad=12, fontweight="bold"
+    )
 
     plt.tight_layout(pad=0.5)
-    out = Path(args.out)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    plt.savefig(out, dpi=args.dpi, bbox_inches="tight", facecolor="white")
-    print(f"Saved → {out}")
+    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(out_path, dpi=dpi, bbox_inches="tight", facecolor="white")
+    plt.close(fig)   # free memory — important when rendering multiple figures
+    print(f"Saved → {out_path}")
+
+
+# ── Main ─────────────────────────────────────────────────────────────────────
+
+def main():
+    """Load pling data and produce two figures: full graph and no-hub graph.
+
+    The two igraph.Graph objects (``g_full`` and ``g_no_hubs``) are kept as
+    separate, fully attributed data structures so they can be used for further
+    graph-theoretic calculations after this function returns.
+    """
+    args = parse_args()
+
+    # ── Load raw data ─────────────────────────────────────────────────────────
+    with open(args.json) as fh:
+        raw = json.load(fh)
+    raw_nodes = raw["elements"]["nodes"]
+    raw_edges = raw["elements"]["edges"]
+
+    typing = pd.read_csv(args.typing, sep="\t")
+    p2t    = dict(zip(typing["plasmid"], typing["type"]))
+
+    # Fallback colour → subcommunity map for nodes absent from typing.tsv
+    color_to_sc: dict = {}
+    for pid, sc in p2t.items():
+        node_color = next(
+            (n["data"].get("color", "") for n in raw_nodes
+             if n["data"]["id"] == pid), ""
+        )
+        if node_color:
+            color_to_sc[node_color] = sc
+
+    # ── Build the two separate igraph objects ─────────────────────────────────
+    # g_full    : complete graph — hub nodes act as bridges between subcommunities
+    # g_no_hubs : hub-free graph — shows direct within-subcommunity structure;
+    #             subcommunities may appear as disconnected components
+    #
+    # Both graphs carry identical vertex/edge attributes (name, color, is_hub,
+    # subcom, sd, td, lbl) and can be used independently for further analysis.
+
+    g_full = build_pling_graph(
+        raw_nodes, raw_edges, p2t, color_to_sc,
+        exclude_hubs=False
+    )
+    g_no_hubs = build_pling_graph(
+        raw_nodes, raw_edges, p2t, color_to_sc,
+        exclude_hubs=True
+    )
+
+    print(f"Full graph:     {g_full.vcount():3d} nodes, {g_full.ecount():4d} edges "
+          f"({sum(g_full.vs['is_hub'])} hubs)")
+    print(f"No-hub graph:   {g_no_hubs.vcount():3d} nodes, {g_no_hubs.ecount():4d} edges")
+
+    # ── Layout — run independently on each graph ──────────────────────────────
+    # Each call to hybrid_layout() uses only the edges present in that graph,
+    # so the no-hub layout clusters subcommunities more tightly (fewer
+    # cross-community edges means less tension pulling blobs apart).
+    print("\nComputing layout for full graph …")
+    coords_full    = hybrid_layout(g_full,    seed=42)
+
+    print("Computing layout for no-hub graph …")
+    coords_no_hubs = hybrid_layout(g_no_hubs, seed=42)
+
+    # ── Render — one figure per graph ─────────────────────────────────────────
+    # If an output directory was provided, write both files into it.
+    if args.out_dir:
+        out_dir = Path(args.out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        args.out = str(out_dir / f"community_{args.community}.png")
+        args.out_nohubs = str(out_dir / f"community_{args.community}_no_hubs.png")
+
+    render_figure(
+        g_full, coords_full,
+        community_idx = args.community,
+        title_suffix  = "| with hub nodes",
+        out_path      = args.out,
+        dpi           = args.dpi,
+    )
+    render_figure(
+        g_no_hubs, coords_no_hubs,
+        community_idx = args.community,
+        title_suffix  = "| hub nodes removed",
+        out_path      = args.out_nohubs,
+        dpi           = args.dpi,
+    )
+
+    # ── Summary of the two igraph objects ─────────────────────────────────────
+    # These can be used directly for further calculations, e.g.:
+    #   g_full.betweenness()          → vertex betweenness centrality
+    #   g_no_hubs.clusters()          → connected components without hubs
+    #   g_full.shortest_paths()       → all-pairs shortest paths
+    #   g_no_hubs.community_fastgreedy() → greedy modularity clustering
+    print(f"\nTwo igraph objects available for further analysis:")
+    print(f"  g_full    → {g_full.vcount()} vertices, {g_full.ecount()} edges")
+    print(f"  g_no_hubs → {g_no_hubs.vcount()} vertices, {g_no_hubs.ecount()} edges")
+    print(f"  Vertex attributes: {g_full.vs.attributes()}")
+    print(f"  Edge attributes:   {g_full.es.attributes()}")
+
+    # Return both graph objects so callers using this as a module can access them
+    return g_full, coords_full, g_no_hubs, coords_no_hubs
 
 
 if __name__ == "__main__":
