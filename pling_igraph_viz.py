@@ -48,8 +48,7 @@ Usage
         --community  0 \\
         --json       community_0.json \\
         --typing     typing.tsv \\
-        --out        community_0_igraph.png \\
-        --out-nohubs community_0_igraph_no_hubs.png \\
+        --out-dir    community_0_outputs/ \\
         --dpi        200
 
 Dependencies
@@ -768,12 +767,11 @@ def main():
     coords_no_hubs = hybrid_layout(g_no_hubs, seed=42)
 
     # ── Render — one figure per graph ─────────────────────────────────────────
-    # If an output directory was provided, write both files into it.
-    if args.out_dir:
-        out_dir = Path(args.out_dir)
-        out_dir.mkdir(parents=True, exist_ok=True)
-        args.out = str(out_dir / f"community_{args.community}.png")
-        args.out_nohubs = str(out_dir / f"community_{args.community}_no_hubs.png")
+    # Write both figures into the single output directory requested by CLI.
+    out_dir = Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    args.out = str(out_dir / f"community_{args.community}.png")
+    args.out_nohubs = str(out_dir / f"community_{args.community}_no_hubs.png")
 
     render_figure(
         g_full, coords_full,
