@@ -89,8 +89,10 @@ def parse_args() -> argparse.Namespace:
         description="Recreate pling community visualisations with igraph."
     )
     p.add_argument("--community",  type=int, default=0)
-    p.add_argument("--json",       default="/mnt/user-data/uploads/community_0.json")
-    p.add_argument("--typing",     default="/mnt/user-data/uploads/typing.tsv")
+    p.add_argument("--json",       required=True,
+                   help="Path to community JSON from pling output")
+    p.add_argument("--typing",     required=True,
+                   help="Path to typing.tsv")
     p.add_argument("--out-dir",    required=True,
                    help="Output directory where both full and no-hub PNGs will be written")
     p.add_argument("--dpi",        type=int, default=200)
