@@ -18,7 +18,7 @@ For each measure two visualisations are produced:
        powerlaw package (raw / linear-bins / log-bins × linear / log scale)
 
 All outputs go to:
-    <out_dir>/graph_analysis/
+    <out_dir>
 
 Usage
 -----
@@ -459,7 +459,7 @@ def print_top_k(g: ig.Graph, values: list[float], measure: str,
 
 def main() -> None:
     args    = parse_args()
-    out_dir = Path(args.out_dir) / "graph_analysis"
+    out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # ── Load both igraph objects ───────────────────────────────────────────────
