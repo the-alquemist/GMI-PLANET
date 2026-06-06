@@ -111,81 +111,90 @@ def load_graphs(json_path: str, typing_path: str):
 
 # ── Centrality computations ───────────────────────────────────────────────────
 
-def degree_centrality(g: ig.Graph) -> list[float]:
-    """Normalised degree centrality: d(v) / (N-1).
+def degree_centrality(g: ig.Graph, normalized: bool = True) -> list[float]:
+    """Degree centrality measures direct neighbourhood size.
 
-    Ranges from 0 (isolated) to 1 (connected to every other node).
-    Normalisation by N-1 makes values comparable across graphs of
-    different sizes.
+    Return raw integer counts when `normalized` is False, or d(v)/(N-1)
+    so values are comparable across graphs of different sizes.
+    """
+    degrees = g.degree()
+    if not normalized:
+        return degrees
+    n = g.vcount()
+    if n <= 1:
+        return [0.0 for _ in degrees]
+    return [d / (n - 1) for d in degrees]
+
+
+def betweenness_centrality(g: ig.Graph, normalized: bool = True) -> list[float]:
+    """Betweenness centrality measures shortest-path brokerage.
+
+    Raw values count how often a node lies on geodesics; normalization
+    divides by (n-1)(n-2)/2 to keep results on a 0-1 scale.
+    """
+    raw = g.betweenness()
+    if not normalized:
+        return raw
+    n = g.vcount()
+    denom = (n - 1) * (n - 2) / 2
+    if denom <= 0:
+        return [0.0 for _ in raw]
+    return [b / denom for b in raw]
+
+
+def closeness_centrality(g: ig.Graph, normalized: bool = True) -> list[float]:
+    """Closeness centrality measures how close a node is to others.
+
+    Raw values use the reachable set only (1 / sum_dist); the
+    normalized form applies the Wasserman–Faust correction
+    n_reach² / ((n-1) * sum_dist) for disconnected graphs.
     """
     n = g.vcount()
-    return [d / (n - 1) for d in g.degree()]
-
-
-def betweenness_centrality(g: ig.Graph) -> list[float]:
-    """Normalised betweenness centrality.
-
-    Raw betweenness counts the number of shortest paths passing through
-    each node.  We normalise by the maximum possible value (n-1)(n-2)/2
-    so the result is in [0, 1].
-
-    For disconnected graphs igraph considers paths only within each
-    connected component (pairs with no path contribute 0).
-    """
-    n   = g.vcount()
-    raw = g.betweenness()
-    denom = (n - 1) * (n - 2) / 2 # pending confirmation
-    return [b / denom if denom > 0 else 0.0 for b in raw]
-
-
-def closeness_centrality(g: ig.Graph) -> list[float]:
-    """Wasserman-Faust closeness centrality for connected and disconnected graphs.
- 
-    Standard closeness is computed only within each node's reachable set, so
-    a node in a 2-node component scores 1.0 — trivially "close" to its sole
-    neighbour.  This is a well-known artefact in disconnected graphs.
- 
-    The Wasserman & Faust (1994) normalization fixes this by multiplying the
-    within-component closeness by the fraction of the full graph that is
-    reachable:
- 
-        WF(v) = n_reach² / ( (n − 1) × Σ d(v, u) )
- 
-    where n_reach = number of vertices reachable from v (excluding v itself)
-    and n = total vertex count.  For a fully connected graph every vertex is
-    reachable so WF reduces exactly to standard closeness (verified: max
-    difference = 0 on community_0 full graph).
- 
-    For disconnected graphs, nodes in small components are penalised:
-        • 2-node component, n=148 → WF = 1²/(147×1) ≈ 0.007  (was 1.0)
-        • Isolated node → WF = 0  (was NaN)
-    """
-    n        = g.vcount()
-    all_dist = g.distances()          # n×n list-of-lists; inf = unreachable
-    result   = []
+    # g.distances() returns an n×n list of lists; inf marks unreachable nodes.
+    all_dist = g.distances()
+    result = []
     for v in range(n):
-        reach = [d for u, d in enumerate(all_dist[v])
-                 if u != v and d != float("inf")]
+        reach = [d for u, d in enumerate(all_dist[v]) if u != v and d != float("inf")]
         if not reach:
-            result.append(0.0)        # isolated node
+            # Isolated node: no reachable neighbours, so closeness is 0.
+            result.append(0.0)
             continue
-        n_reach  = len(reach)
+        n_reach = len(reach)
         sum_dist = sum(reach)
-        result.append(n_reach ** 2 / ((n - 1) * sum_dist))
+        if not normalized:
+            result.append(1 / sum_dist)
+        else:
+            result.append(n_reach ** 2 / ((n - 1) * sum_dist))
     return result
 
 
-def eigenvector_centrality(g: ig.Graph) -> list[float]:
-    """Eigenvector centrality.
+def eigenvector_centrality(g: ig.Graph, normalized: bool = True) -> list[float]:
+    """Eigenvector centrality measures influence via well-connected neighbours.
 
-    For disconnected graphs the dominant eigenvector is only meaningful
-    within the largest connected component; nodes in smaller components
-    receive a value of ~0.  We suppress the igraph warning about this
-    since it is expected for the no-hub graph (11 components).
+    The values are computed only on the largest connected component;
+    vertices in smaller components get 0.0. The `normalized` flag is kept
+    only for API consistency with the other centrality helpers.
     """
+    components = g.connected_components()
+    if len(components) == 0:
+        return []
+
+    membership = components.membership
+    largest_component = max(set(membership), key=membership.count)
+    giant_vertices = [idx for idx, component_id in enumerate(membership)
+                      if component_id == largest_component]
+
+    if not giant_vertices:
+        return [0.0 for _ in range(g.vcount())]
+
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        return g.eigenvector_centrality()
+        giant_values = g.subgraph(giant_vertices).eigenvector_centrality()
+
+    values = [0.0 for _ in range(g.vcount())]
+    for vertex_index, value in zip(giant_vertices, giant_values):
+        values[vertex_index] = value
+    return values
 
 
 # ── Degree-distribution / power-law helpers ───────────────────────────────────
@@ -455,12 +464,63 @@ def print_top_k(g: ig.Graph, values: list[float], measure: str,
         print(f"  {rank:>4}  {names[idx]:<30}  {values[idx]:>8.4f}  {hub_flag}")
 
 
+def write_summary(out_dir: Path, community_idx: int, graphs: list,
+                  raw_results: dict, top_k: int = 10) -> None:
+    """Write a plain-text summary of the reported centrality results.
+
+    The summary is raw for degree, betweenness, and eigenvector, but uses
+    the normalized WF closeness values because the graph is disconnected.
+    """
+    out_path = out_dir / f"summary_community_{community_idx}.txt"
+    with open(out_path, "w") as fh:
+        fh.write(f"Community {community_idx} centrality summary\n")
+        fh.write("=" * 60 + "\n\n")
+        fh.write("Note: closeness is reported using WF-normalized values only.\n\n")
+        fh.write("Note: eigenvector centrality is only meaningful within the largest connected component.\n\n")
+
+        for g, coords, label, suffix in graphs:
+            fh.write(f"Graph: {label} ({suffix})\n")
+            fh.write(f"Nodes: {g.vcount()}   Edges: {g.ecount()}\n\n")
+
+            for measure in ("degree", "betweenness", "closeness", "eigenvector"):
+                vals = raw_results.get(measure, {}).get(suffix)
+                if vals is None:
+                    continue
+                arr = np.array(vals)
+                if arr.size == 0:
+                    fh.write(f"{measure}: no data\n\n")
+                    continue
+                maxv = float(arr.max())
+                minv = float(arr.min())
+                max_abs = float(np.abs(arr).max())
+                fh.write(f"{measure}: min={minv:.6g}  max={maxv:.6g}  max_abs={max_abs:.6g}\n")
+
+                # Top-K listing
+                names = g.vs["name"]
+                is_hubs = g.vs["is_hub"]
+                ranked = sorted(range(len(vals)), key=lambda i: vals[i], reverse=True)
+                fh.write(f"Top-{top_k}:\n")
+                for rank, idx in enumerate(ranked[:top_k], 1):
+                    hub_flag = "★" if is_hubs[idx] else ""
+                    fh.write(f"  {rank:>2}. {names[idx]:<30}  {vals[idx]:>10.6f}  {hub_flag}\n")
+                fh.write("\n")
+
+    print(f"  Summary saved → {out_path.name}")
+
+
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 def main() -> None:
     args    = parse_args()
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Container for computed centrality values:
+    # raw_results[measure][suffix] = raw list (absolute values)
+    # norm_results[measure][suffix] = normalized list (for visualization)
+    measures = ("degree", "betweenness", "closeness", "eigenvector")
+    raw_results = {m: {} for m in measures}
+    norm_results = {m: {} for m in measures}
 
     # ── Load both igraph objects ───────────────────────────────────────────────
     print("Loading graphs …")
@@ -481,11 +541,15 @@ def main() -> None:
     # ── 1. Degree centrality + power-law distribution ─────────────────────────
     print("\n── Degree Centrality ──────────────────────────────────────────")
     for g, coords, label, suffix in graphs:
-        vals = degree_centrality(g)
-        print_top_k(g, vals, "degree", label, k=args.top_k)
+        # Degree: compute via helper (raw and normalized)
+        vals_raw = degree_centrality(g, normalized=False)
+        vals_norm = degree_centrality(g, normalized=True)
+        raw_results["degree"][suffix] = vals_raw
+        norm_results["degree"][suffix] = vals_norm
+        print_top_k(g, vals_norm, "degree", label, k=args.top_k)
 
         render_centrality_graph(
-            g, coords, vals,
+            g, coords, vals_norm,
             measure="degree", graph_label=label,
             community_idx=args.community, top_k=args.top_k,
             out_path=out_dir / f"degree_centrality_{suffix}.png",
@@ -501,11 +565,15 @@ def main() -> None:
     # ── 2. Betweenness centrality ─────────────────────────────────────────────
     print("\n── Betweenness Centrality ─────────────────────────────────────")
     for g, coords, label, suffix in graphs:
-        vals = betweenness_centrality(g)
-        print_top_k(g, vals, "betweenness", label, k=args.top_k)
+        # Betweenness: helper handles raw vs normalized
+        vals_raw = betweenness_centrality(g, normalized=False)
+        vals_norm = betweenness_centrality(g, normalized=True)
+        raw_results["betweenness"][suffix] = vals_raw
+        norm_results["betweenness"][suffix] = vals_norm
+        print_top_k(g, vals_norm, "betweenness", label, k=args.top_k)
 
         render_centrality_graph(
-            g, coords, vals,
+            g, coords, vals_norm,
             measure="betweenness", graph_label=label,
             community_idx=args.community, top_k=args.top_k,
             out_path=out_dir / f"betweenness_centrality_{suffix}.png",
@@ -515,11 +583,17 @@ def main() -> None:
     # ── 3. Closeness centrality ───────────────────────────────────────────────
     print("\n── Closeness Centrality ───────────────────────────────────────")
     for g, coords, label, suffix in graphs:
-        vals = closeness_centrality(g)
-        print_top_k(g, vals, "closeness", label, k=args.top_k)
+        # Closeness: raw within-reachable-set vs WF-normalized
+        vals_raw = closeness_centrality(g, normalized=False)
+        vals_norm = closeness_centrality(g, normalized=True)
+        # On disconnected graphs the raw reachable-set value is not stable
+        # for cross-graph validation, so keep the WF-normalized values here.
+        raw_results["closeness"][suffix] = vals_norm
+        norm_results["closeness"][suffix] = vals_norm
+        print_top_k(g, vals_norm, "closeness", label, k=args.top_k)
 
         render_centrality_graph(
-            g, coords, vals,
+            g, coords, vals_norm,
             measure="closeness", graph_label=label,
             community_idx=args.community, top_k=args.top_k,
             out_path=out_dir / f"closeness_centrality_{suffix}.png",
@@ -531,11 +605,14 @@ def main() -> None:
     print("  Note: for the no-hub graph (11 components) eigenvector centrality")
     print("  is only meaningful within the largest connected component (129 nodes).")
     for g, coords, label, suffix in graphs:
-        vals = eigenvector_centrality(g)
-        print_top_k(g, vals, "eigenvector", label, k=args.top_k)
+        vals_norm = eigenvector_centrality(g, normalized=True)
+        vals_raw = vals_norm
+        raw_results["eigenvector"][suffix] = vals_raw
+        norm_results["eigenvector"][suffix] = vals_norm
+        print_top_k(g, vals_norm, "eigenvector", label, k=args.top_k)
 
         render_centrality_graph(
-            g, coords, vals,
+            g, coords, vals_norm,
             measure="eigenvector", graph_label=label,
             community_idx=args.community, top_k=args.top_k,
             out_path=out_dir / f"eigenvector_centrality_{suffix}.png",
@@ -549,6 +626,9 @@ def main() -> None:
     print(f"Total files: {len(files)}")
     for f in files:
         print(f"  {f.name}")
+
+    # Write a plain-text summary with min/max/max-abs and top-K lists
+    write_summary(out_dir, args.community, graphs, raw_results, top_k=args.top_k)
 
 
 if __name__ == "__main__":
