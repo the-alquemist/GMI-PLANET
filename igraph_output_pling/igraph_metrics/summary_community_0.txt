@@ -1,117 +1,211 @@
-Community 0 centrality summary
+Community 0 – Graph Analysis Summary
 ============================================================
 
-Note: closeness is reported using WF-normalized values only.
+Notes
+-----
+• Closeness uses Wasserman-Faust normalization for disconnected graphs.
+• Eigenvector centrality is only meaningful within the largest
+  connected component; smaller-component nodes are set to 0.
+• Local clustering coefficient is 0 for nodes with degree < 2.
+• Average path length excludes unreachable pairs (inf distances).
 
-Note: eigenvector centrality is only meaningful within the largest connected component.
+────────────────────────────────────────────────────────────
+Graph: Full graph (with hub nodes)
+  Nodes : 152
+  Edges : 1187
+  Components : 152
+  Component sizes : [152]
 
-Graph: Full graph (with hub nodes) (full)
-Nodes: 152   Edges: 1187
+  Global Clustering Coefficient (transitivity) : 0.594091
+  Average Path Length (reachable pairs)         : 3.009934
 
-degree: min=1  max=72  max_abs=72
-Top-10:
-   1. pVA765_0.7                       72.000000  ★
-   2. pIH290_0.23                      47.000000  ★
-   3. pIH290_0.3                       44.000000  
-   4. pIH290_0.28                      40.000000  
-   5. pVA544_3                         40.000000  
-   6. pReSeq_VA61_1                    40.000000  
-   7. pVA765_1_B                       40.000000  
-   8. pVA765_1_A                       36.000000  ★
-   9. pReSeq_VA61_4                    33.000000  
-  10. pVA765_4_B                       33.000000  
+  Degree Centrality
+    min     = 1.000000
+    max     = 72.000000
+    max_abs = 72.000000
+    mean    = 15.618421
+    std     = 11.564427
+    Top-10:
+       1. pVA765_0.7                       72.000000 ★
+       2. pIH290_0.23                      47.000000 ★
+       3. pIH290_0.3                       44.000000
+       4. pIH290_0.28                      40.000000
+       5. pVA544_3                         40.000000
+       6. pReSeq_VA61_1                    40.000000
+       7. pVA765_1_B                       40.000000
+       8. pVA765_1_A                       36.000000 ★
+       9. pReSeq_VA61_4                    33.000000
+      10. pVA765_4_B                       33.000000
 
-betweenness: min=0  max=3575.11  max_abs=3575.11
-Top-10:
-   1. pVA765_0.7                      3575.106358  ★
-   2. pVA765_1_A                      1880.852086  ★
-   3. pVA544_8                        1451.973238  
-   4. pVA436_1                        1204.157448  
-   5. pVA754_9                        1020.000000  
-   6. pVA2682_52                      971.172143  
-   7. pIH290_0.23                     834.642890  ★
-   8. pVA524_4_B                      651.470486  
-   9. pIH290_0.3                      533.389836  
-  10. pIH359_5                        521.355487  
+  Betweenness Centrality
+    min     = 0.000000
+    max     = 3575.106358
+    max_abs = 3575.106358
+    mean    = 151.750000
+    std     = 388.076483
+    Top-10:
+       1. pVA765_0.7                      3575.106358 ★
+       2. pVA765_1_A                      1880.852086 ★
+       3. pVA544_8                        1451.973238
+       4. pVA436_1                        1204.157448
+       5. pVA754_9                        1020.000000
+       6. pVA2682_52                      971.172143
+       7. pIH290_0.23                     834.642890 ★
+       8. pVA524_4_B                      651.470486
+       9. pIH290_0.3                      533.389836
+      10. pIH359_5                        521.355487
 
-closeness: min=0.15519  max=0.480892  max_abs=0.480892
-Top-10:
-   1. pVA765_0.7                        0.480892  ★
-   2. pIH290_0.23                       0.470405  ★
-   3. pVA1184_286                       0.448071  
-   4. pVA605_296                        0.448071  
-   5. pVA528_281                        0.446746  
-   6. pVA544_8                          0.445428  
-   7. pIH290_0.3                        0.445428  
-   8. pIH290_0.28                       0.442815  
-   9. pVA544_3                          0.442815  
-  10. pVA765_275                        0.432665  
+  Closeness Centrality
+    min     = 0.155190
+    max     = 0.480892
+    max_abs = 0.480892
+    mean    = 0.349224
+    std     = 0.068292
+    Top-10:
+       1. pVA765_0.7                        0.480892 ★
+       2. pIH290_0.23                       0.470405 ★
+       3. pVA1184_286                       0.448071
+       4. pVA605_296                        0.448071
+       5. pVA528_281                        0.446746
+       6. pVA544_8                          0.445428
+       7. pIH290_0.3                        0.445428
+       8. pIH290_0.28                       0.442815
+       9. pVA544_3                          0.442815
+      10. pVA765_275                        0.432665
 
-eigenvector: min=6.90804e-07  max=1  max_abs=1
-Top-10:
-   1. pIH290_0.23                       1.000000  ★
-   2. pIH290_0.3                        0.981863  
-   3. pVA1505_61                        0.939948  
-   4. pVA1835_58_B                      0.935498  
-   5. pVA791_57                         0.935498  
-   6. pVA1393_58                        0.935498  
-   7. pVA1626_57                        0.935498  
-   8. pVA1722_58                        0.935498  
-   9. pVA61_57                          0.935498  
-  10. pVA1825_57                        0.935498  
+  Eigenvector Centrality
+    min     = 0.000001
+    max     = 1.000000
+    max_abs = 1.000000
+    mean    = 0.310949
+    std     = 0.315261
+    Top-10:
+       1. pIH290_0.23                       1.000000 ★
+       2. pIH290_0.3                        0.981863
+       3. pVA1505_61                        0.939948
+       4. pVA1835_58_B                      0.935498
+       5. pVA791_57                         0.935498
+       6. pVA1393_58                        0.935498
+       7. pVA1626_57                        0.935498
+       8. pVA1722_58                        0.935498
+       9. pVA61_57                          0.935498
+      10. pVA1825_57                        0.935498
 
-Graph: No-hub graph (no_hubs)
-Nodes: 148   Edges: 1019
+  Local Clustering Coefficient
+    min     = 0.000000
+    max     = 1.000000
+    max_abs = 1.000000
+    mean    = 0.638696
+    std     = 0.323974
+    Top-10:
+       1. pIH290_3                          1.000000
+       2. pVA1101_40                        1.000000
+       3. pIH290_6                          1.000000
+       4. pVA1393_9                         1.000000
+       5. pVA2682_9                         1.000000
+       6. pVA754_27                         1.000000
+       7. pReSeq_VA61_10                    1.000000
+       8. pReSeq_VA61_126_A                 1.000000
+       9. pVA61_126                         1.000000
+      10. pVA791_17                         1.000000
 
-degree: min=0  max=44  max_abs=44
-Top-10:
-   1. pIH290_0.3                       44.000000  
-   2. pIH290_0.28                      40.000000  
-   3. pVA544_3                         40.000000  
-   4. pReSeq_VA61_1                    40.000000  
-   5. pVA765_1_B                       40.000000  
-   6. pReSeq_VA61_4                    33.000000  
-   7. pVA765_4_B                       33.000000  
-   8. pVA544_8                         30.000000  
-   9. pVA2682_52                       28.000000  
-  10. pVA1101_5                        27.000000  
+────────────────────────────────────────────────────────────
+Graph: No-hub graph
+  Nodes : 148
+  Edges : 1019
+  Components : 148
+  Component sizes : [129, 8, 2, 2, 1, 1, 1, 1, 1, 1, 1]
 
-betweenness: min=0  max=2074.45  max_abs=2074.45
-Top-10:
-   1. pVA2682_52                      2074.451951  
-   2. pVA544_8                        1373.730877  
-   3. pIH290_0.3                      1312.286420  
-   4. pVA436_1                        1273.110291  
-   5. pIH290_0.28                     1185.174427  
-   6. pVA544_3                        1185.174427  
-   7. pVA524_4_B                      743.379867  
-   8. pIH290_7                        603.715977  
-   9. pVA1101_5                       447.242157  
-  10. pReSeq_VA61_1                   381.036341  
+  Global Clustering Coefficient (transitivity) : 0.690344
+  Average Path Length (reachable pairs)         : 3.060343
 
-closeness: min=0  max=0.422181  max_abs=0.422181
-Top-10:
-   1. pIH290_0.3                        0.422181  
-   2. pIH290_0.28                       0.419007  
-   3. pVA544_3                          0.419007  
-   4. pVA544_8                          0.408263  
-   5. pVA2682_52                        0.379101  
-   6. pVA1393_58                        0.361869  
-   7. pVA1505_61                        0.361869  
-   8. pVA1626_57                        0.361869  
-   9. pVA1686_57                        0.361869  
-  10. pVA1722_58                        0.361869  
+  Degree Centrality
+    min     = 0.000000
+    max     = 44.000000
+    max_abs = 44.000000
+    mean    = 13.770270
+    std     = 10.336955
+    Top-10:
+       1. pIH290_0.3                       44.000000
+       2. pIH290_0.28                      40.000000
+       3. pVA544_3                         40.000000
+       4. pReSeq_VA61_1                    40.000000
+       5. pVA765_1_B                       40.000000
+       6. pReSeq_VA61_4                    33.000000
+       7. pVA765_4_B                       33.000000
+       8. pVA544_8                         30.000000
+       9. pVA2682_52                       28.000000
+      10. pVA1101_5                        27.000000
 
-eigenvector: min=0  max=1  max_abs=1
-Top-10:
-   1. pVA1825_57                        1.000000  
-   2. pVA527_58                         1.000000  
-   3. pVA754_57                         1.000000  
-   4. pVA767_57                         1.000000  
-   5. pVA1505_61                        1.000000  
-   6. pVA1722_58                        1.000000  
-   7. pVA1835_58_B                      1.000000  
-   8. pVA61_57                          1.000000  
-   9. pVA1393_58                        1.000000  
-  10. pVA1626_57                        1.000000  
+  Betweenness Centrality
+    min     = 0.000000
+    max     = 2074.451951
+    max_abs = 2074.451951
+    mean    = 115.351351
+    std     = 293.998689
+    Top-10:
+       1. pVA2682_52                      2074.451951
+       2. pVA544_8                        1373.730877
+       3. pIH290_0.3                      1312.286420
+       4. pVA436_1                        1273.110291
+       5. pIH290_0.28                     1185.174427
+       6. pVA544_3                        1185.174427
+       7. pVA524_4_B                      743.379867
+       8. pIH290_7                        603.715977
+       9. pVA1101_5                       447.242157
+      10. pReSeq_VA61_1                   381.036341
+
+  Closeness Centrality
+    min     = 0.000000
+    max     = 0.422181
+    max_abs = 0.422181
+    mean    = 0.258914
+    std     = 0.107990
+    Top-10:
+       1. pIH290_0.3                        0.422181
+       2. pIH290_0.28                       0.419007
+       3. pVA544_3                          0.419007
+       4. pVA544_8                          0.408263
+       5. pVA2682_52                        0.379101
+       6. pVA1393_58                        0.361869
+       7. pVA1505_61                        0.361869
+       8. pVA1626_57                        0.361869
+       9. pVA1686_57                        0.361869
+      10. pVA1722_58                        0.361869
+
+  Eigenvector Centrality
+    min     = 0.000000
+    max     = 1.000000
+    max_abs = 1.000000
+    mean    = 0.261523
+    std     = 0.336571
+    Top-10:
+       1. pVA1825_57                        1.000000
+       2. pVA527_58                         1.000000
+       3. pVA754_57                         1.000000
+       4. pVA767_57                         1.000000
+       5. pVA1505_61                        1.000000
+       6. pVA1722_58                        1.000000
+       7. pVA1835_58_B                      1.000000
+       8. pVA61_57                          1.000000
+       9. pVA1393_58                        1.000000
+      10. pVA1626_57                        1.000000
+
+  Local Clustering Coefficient
+    min     = 0.000000
+    max     = 1.000000
+    max_abs = 1.000000
+    mean    = 0.652585
+    std     = 0.332928
+    Top-10:
+       1. pIH290_3                          1.000000
+       2. pVA1101_40                        1.000000
+       3. pIH290_6                          1.000000
+       4. pVA1393_9                         1.000000
+       5. pVA2682_9                         1.000000
+       6. pVA754_27                         1.000000
+       7. pReSeq_VA61_10                    1.000000
+       8. pVA791_17                         1.000000
+       9. pVA1101_21                        1.000000
+      10. pVA2464_160                       1.000000
 

@@ -3,19 +3,25 @@ pling_igraph_analysis.py
 =======================
 Graph-theoretic centrality analysis for pling plasmid community networks.
 
-Computes four centrality measures on both the full (hub-included) and
+Computes six graph measures on both the full (hub-included) and
 hub-removed igraph objects produced by pling_igraph_viz.py:
 
-    1. Degree Centrality      – how many direct neighbours a node has
-    2. Betweenness Centrality – how often a node lies on shortest paths
-    3. Closeness Centrality   – how close a node is to all others
-    4. Eigenvector Centrality – being connected to well-connected nodes
+    1. Degree Centrality            – how many direct neighbours a node has
+    2. Betweenness Centrality       – how often a node lies on shortest paths
+    3. Closeness Centrality         – how close a node is to all others
+    4. Eigenvector Centrality       – being connected to well-connected nodes
+    5. Clustering Coefficient       – local triangle density around each node;
+                                      global value (transitivity) reported in summary
+    6. Average Path Length          – mean shortest path over all reachable pairs;
+                                      full pairwise-distance histogram also saved
 
-For each measure two visualisations are produced:
-    a. Network graph – same three-phase layout as the reference figures,
-       nodes coloured by centrality value (light = low, dark = high)
-    b. Degree measure: additionally a 6-panel distribution plot using the
-       powerlaw package (raw / linear-bins / log-bins × linear / log scale)
+For each node-level measure a network visualisation is produced:
+    • Nodes coloured by the measure value (light = low, dark = high)
+    • Top-K nodes labelled; hub nodes shown as stars in the full graph
+    • Degree additionally gets a 6-panel power-law distribution plot
+
+Average path length and global clustering coefficient are scalars —
+they are reported in the text summary and as a path-length histogram.
 
 All outputs go to:
     <out_dir>
@@ -197,7 +203,60 @@ def eigenvector_centrality(g: ig.Graph, normalized: bool = True) -> list[float]:
     return values
 
 
-# ── Degree-distribution / power-law helpers ───────────────────────────────────
+# ── Clustering coefficient & average path length ──────────────────────────────
+
+def local_clustering_coefficient(g: ig.Graph) -> list[float]:
+    """Local clustering coefficient for every vertex.
+
+    Uses igraph's ``transitivity_local_undirected()``, which counts the
+    fraction of a node's neighbour pairs that are themselves connected:
+
+        C(v) = (triangles through v) / (connected triples centred on v)
+
+    Nodes with degree < 2 cannot form triangles and receive NaN from igraph;
+    we replace those with 0.0 so colourmap normalisation works correctly.
+    """
+    raw = g.transitivity_local_undirected()
+    return [0.0 if (v is None or math.isnan(v)) else v for v in raw]
+
+
+def global_clustering_coefficient(g: ig.Graph) -> float:
+    """Global clustering coefficient (graph-level transitivity).
+
+    Uses igraph's ``transitivity_undirected()``, which counts closed
+    triplets over all triplets in the graph — equivalent to the ratio of
+    (3 × triangles) / (connected triples).  Returns a single float in [0, 1].
+    """
+    return g.transitivity_undirected()
+
+
+def average_path_length_metric(g: ig.Graph) -> float:
+    """Mean shortest-path length over all reachable vertex pairs.
+
+    Uses igraph's ``average_path_length(directed=False, unconn=True)``.
+    When ``unconn=True`` igraph skips pairs with no path (infinite distance),
+    which is the correct treatment for the disconnected no-hub graph — it
+    computes the average within and across components for reachable pairs only.
+    """
+    return g.average_path_length(directed=False, unconn=True)
+
+
+def pairwise_path_lengths(g: ig.Graph) -> list[int]:
+    """Collect all finite pairwise shortest-path lengths (upper triangle only).
+
+    Used to draw the path-length distribution histogram.  Self-distances (0)
+    and unreachable pairs (inf) are excluded.
+    """
+    dist_matrix = g.distances()   # n×n list-of-lists; inf = unreachable
+    n = g.vcount()
+    lengths = []
+    for i in range(n):
+        for j in range(i + 1, n):   # upper triangle → each pair once
+            d = dist_matrix[i][j]
+            if d != float("inf"):
+                lengths.append(int(d))
+    return lengths
+
 
 def raw_frequency(data: list) -> tuple:
     """Exact degree → frequency counts (no binning)."""
@@ -226,12 +285,13 @@ def bin_frequency(data: list, logarithmic_bins: bool = False) -> tuple:
 
 # ── Visualisation helpers ─────────────────────────────────────────────────────
 
-# Colour scheme matching Examples.ipynb
+# Colour scheme matching Examples.ipynb; clustering uses Reds (distinct from others)
 _CMAPS = {
     "degree":       cm.Greens,
     "betweenness":  cm.Oranges,
     "closeness":    cm.Blues,
     "eigenvector":  cm.Purples,
+    "clustering":   cm.Reds,
 }
 
 _MEASURE_LABELS = {
@@ -239,6 +299,7 @@ _MEASURE_LABELS = {
     "betweenness":  "Betweenness Centrality",
     "closeness":    "Closeness Centrality",
     "eigenvector":  "Eigenvector Centrality",
+    "clustering":   "Local Clustering Coefficient",
 }
 
 
@@ -448,7 +509,66 @@ def render_degree_distribution(g: ig.Graph,
     print(f"  Saved → {out_path.name}")
 
 
-# ── Summary table ─────────────────────────────────────────────────────────────
+def render_path_length_distribution(g: ig.Graph,
+                                     graph_label: str,
+                                     community_idx: int,
+                                     apl: float,
+                                     out_path: Path,
+                                     dpi: int = 200) -> None:
+    """Histogram of all pairwise shortest-path lengths.
+
+    Shows the full distribution of distances between reachable node pairs,
+    with a vertical dashed line marking the average path length (APL).
+    For disconnected graphs only reachable pairs are included (inf excluded),
+    so the no-hub graph shows within- and across-component distances for
+    pairs that can actually communicate.
+
+    Parameters
+    ----------
+    g             : igraph.Graph
+    graph_label   : e.g. "Full graph" or "No-hub graph"
+    community_idx : community number for title
+    apl           : pre-computed average path length (scalar)
+    out_path      : output PNG path
+    dpi           : output resolution
+    """
+    lengths = pairwise_path_lengths(g)
+
+    if not lengths:
+        print(f"  Skipping path-length distribution for {graph_label} "
+              f"(no reachable pairs)")
+        return
+
+    max_len = max(lengths)
+    bins    = range(1, max_len + 2)   # one bar per integer distance
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    fig.patch.set_facecolor("white")
+
+    ax.hist(lengths, bins=bins, align="left", rwidth=0.75,
+            color="#2166ac", edgecolor="white", linewidth=0.5, alpha=0.85)
+
+    # Vertical line for the average path length
+    ax.axvline(apl, color="#d62728", linewidth=2.0, linestyle="--",
+               label=f"Average path length = {apl:.3f}")
+    ax.legend(fontsize=10)
+
+    ax.set_xlabel("Shortest path length", fontsize=11)
+    ax.set_ylabel("Number of reachable pairs", fontsize=11)
+    ax.set_xticks(range(1, max_len + 1))
+    ax.tick_params(labelsize=9)
+    ax.set_title(
+        f"Community {community_idx} – Pairwise path-length distribution\n"
+        f"{graph_label}  |  {len(lengths):,} reachable pairs",
+        fontsize=13, fontweight="bold"
+    )
+
+    plt.tight_layout()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(out_path, dpi=dpi, bbox_inches="tight", facecolor="white")
+    plt.close(fig)
+    print(f"  Saved → {out_path.name}")
+
 
 def print_top_k(g: ig.Graph, values: list[float], measure: str,
                 graph_label: str, k: int = 10) -> None:
@@ -465,44 +585,77 @@ def print_top_k(g: ig.Graph, values: list[float], measure: str,
 
 
 def write_summary(out_dir: Path, community_idx: int, graphs: list,
-                  raw_results: dict, top_k: int = 10) -> None:
-    """Write a plain-text summary of the reported centrality results.
+                  raw_results: dict, scalar_results: dict,
+                  top_k: int = 10) -> None:
+    """Write a plain-text summary of all graph measures.
 
-    The summary is raw for degree, betweenness, and eigenvector, but uses
-    the normalized WF closeness values because the graph is disconnected.
+    Node-level measures (degree, betweenness, closeness, eigenvector,
+    clustering) are reported with min / max / mean / std and a top-K ranking.
+
+    Graph-level scalars (global clustering coefficient, average path length)
+    are reported once per graph since they do not have per-node values.
     """
     out_path = out_dir / f"summary_community_{community_idx}.txt"
     with open(out_path, "w") as fh:
-        fh.write(f"Community {community_idx} centrality summary\n")
+        fh.write(f"Community {community_idx} – Graph Analysis Summary\n")
         fh.write("=" * 60 + "\n\n")
-        fh.write("Note: closeness is reported using WF-normalized values only.\n\n")
-        fh.write("Note: eigenvector centrality is only meaningful within the largest connected component.\n\n")
+        fh.write("Notes\n")
+        fh.write("-----\n")
+        fh.write("• Closeness uses Wasserman-Faust normalization for disconnected graphs.\n")
+        fh.write("• Eigenvector centrality is only meaningful within the largest\n")
+        fh.write("  connected component; smaller-component nodes are set to 0.\n")
+        fh.write("• Local clustering coefficient is 0 for nodes with degree < 2.\n")
+        fh.write("• Average path length excludes unreachable pairs (inf distances).\n\n")
 
         for g, coords, label, suffix in graphs:
-            fh.write(f"Graph: {label} ({suffix})\n")
-            fh.write(f"Nodes: {g.vcount()}   Edges: {g.ecount()}\n\n")
+            fh.write("─" * 60 + "\n")
+            fh.write(f"Graph: {label}\n")
+            fh.write(f"  Nodes : {g.vcount()}\n")
+            fh.write(f"  Edges : {g.ecount()}\n")
+            n_comp = g.connected_components().n
+            fh.write(f"  Components : {n_comp}\n")
+            if n_comp > 1:
+                sizes = sorted(g.connected_components().sizes(), reverse=True)
+                fh.write(f"  Component sizes : {sizes}\n")
+            fh.write("\n")
 
-            for measure in ("degree", "betweenness", "closeness", "eigenvector"):
+            # ── Graph-level scalars ───────────────────────────────────────────
+            global_cc = scalar_results.get("global_clustering", {}).get(suffix)
+            apl       = scalar_results.get("average_path_length", {}).get(suffix)
+            if global_cc is not None:
+                fh.write(f"  Global Clustering Coefficient (transitivity) : {global_cc:.6f}\n")
+            if apl is not None:
+                fh.write(f"  Average Path Length (reachable pairs)         : {apl:.6f}\n")
+            fh.write("\n")
+
+            # ── Node-level measures ───────────────────────────────────────────
+            node_measures = ("degree", "betweenness", "closeness",
+                             "eigenvector", "clustering")
+            for measure in node_measures:
                 vals = raw_results.get(measure, {}).get(suffix)
                 if vals is None:
                     continue
-                arr = np.array(vals)
+                arr = np.array(vals, dtype=float)
                 if arr.size == 0:
-                    fh.write(f"{measure}: no data\n\n")
+                    fh.write(f"  {measure}: no data\n\n")
                     continue
-                maxv = float(arr.max())
-                minv = float(arr.min())
-                max_abs = float(np.abs(arr).max())
-                fh.write(f"{measure}: min={minv:.6g}  max={maxv:.6g}  max_abs={max_abs:.6g}\n")
 
-                # Top-K listing
-                names = g.vs["name"]
+                fh.write(f"  {_MEASURE_LABELS[measure]}\n")
+                fh.write(f"    min     = {arr.min():.6f}\n")
+                fh.write(f"    max     = {arr.max():.6f}\n")
+                fh.write(f"    max_abs = {np.abs(arr).max():.6f}\n")
+                fh.write(f"    mean    = {arr.mean():.6f}\n")
+                fh.write(f"    std     = {arr.std():.6f}\n")
+
+                names   = g.vs["name"]
                 is_hubs = g.vs["is_hub"]
-                ranked = sorted(range(len(vals)), key=lambda i: vals[i], reverse=True)
-                fh.write(f"Top-{top_k}:\n")
+                ranked  = sorted(range(len(vals)), key=lambda i: vals[i],
+                                 reverse=True)
+                fh.write(f"    Top-{top_k}:\n")
                 for rank, idx in enumerate(ranked[:top_k], 1):
-                    hub_flag = "★" if is_hubs[idx] else ""
-                    fh.write(f"  {rank:>2}. {names[idx]:<30}  {vals[idx]:>10.6f}  {hub_flag}\n")
+                    hub_flag = " ★" if is_hubs[idx] else ""
+                    fh.write(f"      {rank:>2}. {names[idx]:<30}"
+                             f"  {vals[idx]:>10.6f}{hub_flag}\n")
                 fh.write("\n")
 
     print(f"  Summary saved → {out_path.name}")
@@ -516,11 +669,13 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # Container for computed centrality values:
-    # raw_results[measure][suffix] = raw list (absolute values)
-    # norm_results[measure][suffix] = normalized list (for visualization)
-    measures = ("degree", "betweenness", "closeness", "eigenvector")
-    raw_results = {m: {} for m in measures}
-    norm_results = {m: {} for m in measures}
+    # raw_results[measure][suffix]    = per-node list (absolute / WF values)
+    # norm_results[measure][suffix]   = normalized list (for visualisation)
+    # scalar_results[measure][suffix] = single float (graph-level scalars)
+    measures = ("degree", "betweenness", "closeness", "eigenvector", "clustering")
+    raw_results    = {m: {} for m in measures}
+    norm_results   = {m: {} for m in measures}
+    scalar_results = {"global_clustering": {}, "average_path_length": {}}
 
     # ── Load both igraph objects ───────────────────────────────────────────────
     print("Loading graphs …")
@@ -619,6 +774,44 @@ def main() -> None:
             dpi=args.dpi,
         )
 
+    # ── 5. Clustering coefficient ─────────────────────────────────────────────
+    print("\n── Clustering Coefficient ─────────────────────────────────────")
+    for g, coords, label, suffix in graphs:
+        # Local CC: per-node value (NaN-safe; nodes with deg < 2 → 0)
+        vals_local = local_clustering_coefficient(g)
+        raw_results["clustering"][suffix]  = vals_local
+        norm_results["clustering"][suffix] = vals_local
+        print_top_k(g, vals_local, "clustering", label, k=args.top_k)
+
+        # Global CC: single transitivity value for the graph
+        g_cc = global_clustering_coefficient(g)
+        scalar_results["global_clustering"][suffix] = g_cc
+        print(f"\n  Global clustering coefficient [{label}]: {g_cc:.4f}")
+
+        render_centrality_graph(
+            g, coords, vals_local,
+            measure="clustering", graph_label=label,
+            community_idx=args.community, top_k=args.top_k,
+            out_path=out_dir / f"clustering_coefficient_{suffix}.png",
+            dpi=args.dpi,
+        )
+
+    # ── 6. Average path length ────────────────────────────────────────────────
+    print("\n── Average Path Length ────────────────────────────────────────")
+    print("  (computed over reachable pairs only — disconnected pairs excluded)")
+    for g, coords, label, suffix in graphs:
+        apl = average_path_length_metric(g)
+        scalar_results["average_path_length"][suffix] = apl
+        print(f"\n  Average path length [{label}]: {apl:.4f}")
+
+        render_path_length_distribution(
+            g, graph_label=label,
+            community_idx=args.community,
+            apl=apl,
+            out_path=out_dir / f"path_length_distribution_{suffix}.png",
+            dpi=args.dpi,
+        )
+
     # ── Summary ───────────────────────────────────────────────────────────────
     files = sorted(out_dir.glob("*.png"))
     print(f"\n{'─'*60}")
@@ -628,7 +821,8 @@ def main() -> None:
         print(f"  {f.name}")
 
     # Write a plain-text summary with min/max/max-abs and top-K lists
-    write_summary(out_dir, args.community, graphs, raw_results, top_k=args.top_k)
+    write_summary(out_dir, args.community, graphs, raw_results,
+                  scalar_results, top_k=args.top_k)
 
 
 if __name__ == "__main__":
