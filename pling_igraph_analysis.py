@@ -28,8 +28,7 @@ All outputs go to:
 
 Usage
 -----
-    python3 pling_igraph_analysis.py            # uses defaults below
-    python3 pling_igraph_analysis.py --dpi 300
+    python3 pling_igraph_analysis.py
 
 Dependencies
 ------------
@@ -283,7 +282,160 @@ def bin_frequency(data: list, logarithmic_bins: bool = False) -> tuple:
     return x, y
 
 
-# ── Visualisation helpers ─────────────────────────────────────────────────────
+def raw_histogram(data: list, n_bins: int = None) -> tuple:
+    """Histogram for continuous data, returning bin-centre / count pairs.
+
+    Used as the "raw frequency" panel for continuous centrality values,
+    in place of the exact-count approach used for discrete degree values.
+
+    Parameters
+    ----------
+    data   : list of positive float values
+    n_bins : number of bins; defaults to the square-root rule (sqrt of n)
+
+    Returns
+    -------
+    centres : list of bin midpoints
+    counts  : list of integer counts per bin
+    """
+    if n_bins is None:
+        n_bins = max(5, int(math.sqrt(len(data))))
+    counts, edges = np.histogram(data, bins=n_bins)
+    centres = [(edges[i] + edges[i + 1]) / 2 for i in range(len(counts))]
+    return centres, list(counts)
+
+
+def render_measure_distribution(values: list,
+                                 measure_name: str,
+                                 x_label: str,
+                                 graph_label: str,
+                                 community_idx: int,
+                                 out_path: Path,
+                                 discrete: bool = False,
+                                 dpi: int = 200) -> None:
+    """Six-panel distribution plot for any graph measure — degree or centrality.
+
+    Replaces both the old ``render_degree_distribution`` and the continuous-only
+    version: pass ``discrete=True`` for integer degree values (uses exact counts
+    in the raw panel), or ``discrete=False`` (default) for continuous centrality
+    values (uses a sqrt-rule histogram in the raw panel).
+
+    Panels (2 rows × 3 columns)
+    ---------------------------
+    Row 1 (linear y-axis):
+        Col 1 – raw frequency / histogram
+        Col 2 – probability density, linear bins  (powerlaw package)
+        Col 3 – probability density, log-spaced bins
+    Row 2 (log-log axes):
+        Same three representations on log-log scale.
+
+    When the positive data spans < 1 log-decade the log-bin panels are
+    suppressed and replaced with an annotation explaining why.
+
+    Parameters
+    ----------
+    values       : per-node values (integers for degree, floats for centrality)
+    measure_name : display name used in the title
+    x_label      : x-axis label
+    graph_label  : e.g. "Full graph" or "No-hub graph"
+    community_idx: community number for title
+    out_path     : output PNG path
+    discrete     : True → use exact counts (degree); False → histogram (centrality)
+    dpi          : output resolution
+    """
+    positive = [v for v in values if v > 0]
+
+    if len(positive) < 5:
+        print(f"  Skipping {measure_name} distribution for {graph_label} "
+              f"(fewer than 5 positive values)")
+        return
+
+    # Detect whether the data spans enough range for log-binning to be useful.
+    # Log-spaced bins require at least ~1 decade (10x range) to produce
+    # more than 2-3 meaningful bins.  Connected-graph closeness, for example,
+    # typically spans only 0.5 decades — log panels would be nearly empty.
+    log_span = math.log10(max(positive) / min(positive))
+    log_ok   = log_span >= 1.0
+
+    fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+    fig.patch.set_facecolor("white")
+
+    # Col 0: exact counts for discrete (degree), histogram for continuous
+    raw_fn    = raw_frequency if discrete else raw_histogram
+    raw_title = "Raw frequency" if discrete else "Raw histogram"
+    configs = [
+        (raw_title,                    raw_fn,         {},                         False),
+        ("Linear bins",                bin_frequency,  {},                         False),
+        ("Log bins",                   bin_frequency,  {"logarithmic_bins": True}, False),
+        (raw_title + "  (log-log)",    raw_fn,         {},                         True),
+        ("Linear bins  (log-log)",     bin_frequency,  {},                         True),
+        ("Log bins  (log-log)",        bin_frequency,  {"logarithmic_bins": True}, True),
+    ]
+    colors_row = ["#d62728", "#1f77b4", "#1f77b4",
+                  "#d62728", "#1f77b4", "#1f77b4"]
+    markers    = ["v", "o", "o", "^", "x", "o"]
+
+    for idx, (title, fn, kwargs, loglog) in enumerate(configs):
+        row, col = divmod(idx, 3)
+        ax = axes[row][col]
+
+        # Log-bin columns (col 2) need sufficient data range.
+        is_logbin_col = (col == 2)
+        if is_logbin_col and not log_ok:
+            ax.text(0.5, 0.5,
+                    f"Log bins unavailable:\ndata spans only "
+                    f"{log_span:.2f} decades\n(<1 decade required)",
+                    transform=ax.transAxes, ha="center", va="center",
+                    fontsize=9, color="#888888",
+                    bbox=dict(boxstyle="round,pad=0.4", fc="white", ec="#cccccc"))
+            ax.set_title(title, fontsize=10)
+            ax.set_xlabel(x_label, fontsize=9)
+            ax.set_ylabel("Frequency / density", fontsize=9)
+            ax.tick_params(labelsize=8)
+            if loglog:
+                ax.set_xscale("log")
+                ax.set_yscale("log")
+            continue
+
+        try:
+            x, y = fn(positive, **kwargs)
+            # Drop zeros / NaNs that break log scale
+            pairs = [(xi, yi) for xi, yi in zip(x, y)
+                     if xi > 0 and yi > 0
+                     and not (isinstance(yi, float) and math.isnan(yi))]
+            if not pairs:
+                ax.text(0.5, 0.5, "No data", transform=ax.transAxes,
+                        ha="center", va="center")
+            else:
+                xs, ys = zip(*pairs)
+                ax.scatter(xs, ys, marker=markers[idx],
+                           c=colors_row[idx], s=30, alpha=0.8)
+        except Exception as exc:
+            ax.text(0.5, 0.5, f"Error:\n{exc}", transform=ax.transAxes,
+                    ha="center", va="center", fontsize=8)
+
+        ax.set_title(title, fontsize=10)
+        ax.set_xlabel(x_label, fontsize=9)
+        ax.set_ylabel("Frequency / density", fontsize=9)
+        ax.tick_params(labelsize=8)
+        if loglog:
+            ax.set_xscale("log")
+            ax.set_yscale("log")
+
+    n_zero    = sum(1 for v in values if v == 0)
+    n_positive = len(positive)
+    fig.suptitle(
+        f"Community {community_idx} – {measure_name} distribution\n"
+        f"{graph_label}  |  {n_positive} non-zero values"
+        + (f"  ({n_zero} zeros excluded)" if n_zero else ""),
+        fontsize=14, fontweight="bold", y=1.01
+    )
+    plt.tight_layout()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(out_path, dpi=dpi, bbox_inches="tight", facecolor="white")
+    plt.close(fig)
+    print(f"  Saved → {out_path.name}")
+
 
 # Colour scheme matching Examples.ipynb; clustering uses Reds (distinct from others)
 _CMAPS = {
@@ -411,98 +563,6 @@ def render_centrality_graph(g: ig.Graph,
     )
 
     plt.tight_layout(pad=0.5)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    plt.savefig(out_path, dpi=dpi, bbox_inches="tight", facecolor="white")
-    plt.close(fig)
-    print(f"  Saved → {out_path.name}")
-
-
-def render_degree_distribution(g: ig.Graph,
-                                graph_label: str,
-                                community_idx: int,
-                                out_path: Path,
-                                dpi: int = 200) -> None:
-    """Six-panel degree distribution plot following Examples.ipynb style.
-
-    Panels (2 rows × 3 columns)
-    ---------------------------
-    Row 1 (linear y-axis):
-        Col 1 – raw frequency (no bins)
-        Col 2 – frequency with linear bins
-        Col 3 – frequency with log bins
-    Row 2 (log-log axes):
-        Same three representations on log-log scale.
-
-    A power-law distribution appears as a straight line on a log-log plot
-    with log-spaced bins (bottom-right panel).
-
-    Parameters
-    ----------
-    g            : igraph.Graph
-    graph_label  : e.g. "Full graph" or "No-hub graph"
-    community_idx: community number for title
-    out_path     : output PNG path
-    dpi          : output resolution
-    """
-    degrees = g.degree()
-    # powerlaw package requires positive values; remove isolated nodes (deg=0)
-    data = [d for d in degrees if d > 0]
-
-    if len(data) < 3:
-        print(f"  Skipping degree distribution for {graph_label} "
-              f"(too few non-isolated nodes)")
-        return
-
-    fig, axes = plt.subplots(2, 3, figsize=(18, 10))
-    fig.patch.set_facecolor("white")
-
-    # Column definitions: (title, function, kwargs, log-log)
-    configs = [
-        # Row 0 (linear scale)
-        ("Raw frequency",                  raw_frequency,  {},                      False),
-        ("Linear bins",                    bin_frequency,  {},                      False),
-        ("Log bins",                       bin_frequency,  {"logarithmic_bins": True}, False),
-        # Row 1 (log-log)
-        ("Raw frequency  (log-log)",       raw_frequency,  {},                      True),
-        ("Linear bins  (log-log)",         bin_frequency,  {},                      True),
-        ("Log bins  (log-log)",            bin_frequency,  {"logarithmic_bins": True}, True),
-    ]
-    colors_row = ["#d62728", "#1f77b4", "#1f77b4",
-                  "#d62728", "#1f77b4", "#1f77b4"]
-    markers    = ["v", "o", "o", "^", "x", "o"]
-
-    for idx, (title, fn, kwargs, loglog) in enumerate(configs):
-        row, col = divmod(idx, 3)
-        ax = axes[row][col]
-        try:
-            x, y = fn(data, **kwargs)
-            # Filter zeros/NaNs that break log scale
-            pairs = [(xi, yi) for xi, yi in zip(x, y)
-                     if xi > 0 and yi > 0 and not math.isnan(yi)]
-            if not pairs:
-                ax.text(0.5, 0.5, "No data", transform=ax.transAxes,
-                        ha="center", va="center")
-            else:
-                xs, ys = zip(*pairs)
-                ax.scatter(xs, ys, marker=markers[idx],
-                           c=colors_row[idx], s=30, alpha=0.8)
-        except Exception as exc:
-            ax.text(0.5, 0.5, f"Error:\n{exc}", transform=ax.transAxes,
-                    ha="center", va="center", fontsize=8)
-
-        ax.set_title(title, fontsize=10)
-        ax.set_xlabel("Degree", fontsize=9)
-        ax.set_ylabel("Frequency / density", fontsize=9)
-        ax.tick_params(labelsize=8)
-        if loglog:
-            ax.set_xscale("log")
-            ax.set_yscale("log")
-
-    fig.suptitle(
-        f"Community {community_idx} – Degree distribution\n{graph_label}",
-        fontsize=14, fontweight="bold", y=1.01
-    )
-    plt.tight_layout()
     out_path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(out_path, dpi=dpi, bbox_inches="tight", facecolor="white")
     plt.close(fig)
@@ -664,9 +724,12 @@ def write_summary(out_dir: Path, community_idx: int, graphs: list,
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 def main() -> None:
-    args    = parse_args()
-    out_dir = Path(args.out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    args        = parse_args()
+    out_dir     = Path(args.out_dir)
+    graphs_dir  = out_dir / "graphs"    # network visualisations
+    metrics_dir = out_dir / "metrics"   # distribution plots
+    graphs_dir.mkdir(parents=True, exist_ok=True)
+    metrics_dir.mkdir(parents=True, exist_ok=True)
 
     # Container for computed centrality values:
     # raw_results[measure][suffix]    = per-node list (absolute / WF values)
@@ -707,14 +770,15 @@ def main() -> None:
             g, coords, vals_norm,
             measure="degree", graph_label=label,
             community_idx=args.community, top_k=args.top_k,
-            out_path=out_dir / f"degree_centrality_{suffix}.png",
+            out_path=graphs_dir / f"degree_centrality_{suffix}.png",
             dpi=args.dpi,
         )
-        render_degree_distribution(
-            g, graph_label=label,
+        render_measure_distribution(
+            values=g.degree(), measure_name="Degree",
+            x_label="Degree", graph_label=label,
             community_idx=args.community,
-            out_path=out_dir / f"degree_distribution_{suffix}.png",
-            dpi=args.dpi,
+            out_path=metrics_dir / f"degree_distribution_{suffix}.png",
+            discrete=True, dpi=args.dpi,
         )
 
     # ── 2. Betweenness centrality ─────────────────────────────────────────────
@@ -731,8 +795,20 @@ def main() -> None:
             g, coords, vals_norm,
             measure="betweenness", graph_label=label,
             community_idx=args.community, top_k=args.top_k,
-            out_path=out_dir / f"betweenness_centrality_{suffix}.png",
+            out_path=graphs_dir / f"betweenness_centrality_{suffix}.png",
             dpi=args.dpi,
+        )
+        # Six-panel distribution for raw (unnormalised) betweenness scores.
+        # Raw integer-like counts expose the heavy tail more clearly than
+        # normalised values, which compress everything into [0, 1].
+        render_measure_distribution(
+            values       = vals_raw,
+            measure_name = "Betweenness Centrality",
+            x_label      = "Raw betweenness score",
+            graph_label  = label,
+            community_idx= args.community,
+            out_path     = metrics_dir / f"betweenness_distribution_{suffix}.png",
+            dpi          = args.dpi,
         )
 
     # ── 3. Closeness centrality ───────────────────────────────────────────────
@@ -751,8 +827,20 @@ def main() -> None:
             g, coords, vals_norm,
             measure="closeness", graph_label=label,
             community_idx=args.community, top_k=args.top_k,
-            out_path=out_dir / f"closeness_centrality_{suffix}.png",
+            out_path=graphs_dir / f"closeness_centrality_{suffix}.png",
             dpi=args.dpi,
+        )
+        # Six-panel distribution using WF-normalised values.
+        # WF normalization is used (not raw within-component closeness) because
+        # it gives comparable, artefact-free values across both graphs.
+        render_measure_distribution(
+            values       = vals_norm,
+            measure_name = "Closeness Centrality (Wasserman-Faust)",
+            x_label      = "WF-normalised closeness",
+            graph_label  = label,
+            community_idx= args.community,
+            out_path     = metrics_dir / f"closeness_distribution_{suffix}.png",
+            dpi          = args.dpi,
         )
 
     # ── 4. Eigenvector centrality ─────────────────────────────────────────────
@@ -770,8 +858,30 @@ def main() -> None:
             g, coords, vals_norm,
             measure="eigenvector", graph_label=label,
             community_idx=args.community, top_k=args.top_k,
-            out_path=out_dir / f"eigenvector_centrality_{suffix}.png",
+            out_path=graphs_dir / f"eigenvector_centrality_{suffix}.png",
             dpi=args.dpi,
+        )
+        # Six-panel distribution using only values from the largest connected
+        # component.  Nodes in smaller components receive near-zero floating-point
+        # values (e.g. 3e-19) due to numerical precision — NOT meaningful
+        # eigenvector scores.  We identify them explicitly via component membership
+        # rather than a magic threshold, which is cleaner and more robust.
+        comps_ev   = g.connected_components()
+        main_id_ev = comps_ev.sizes().index(max(comps_ev.sizes()))
+        ev_major_only = [vals_norm[i] for i in range(g.vcount())
+                         if comps_ev.membership[i] == main_id_ev]
+        n_excluded    = g.vcount() - len(ev_major_only)
+        ev_label      = (f"{label}  –  major component only"
+                         f"  ({n_excluded} small-component nodes excluded)"
+                         if n_excluded else label)
+        render_measure_distribution(
+            values       = ev_major_only,
+            measure_name = "Eigenvector Centrality",
+            x_label      = "Eigenvector centrality score",
+            graph_label  = ev_label,
+            community_idx= args.community,
+            out_path     = metrics_dir / f"eigenvector_distribution_{suffix}.png",
+            dpi          = args.dpi,
         )
 
     # ── 5. Clustering coefficient ─────────────────────────────────────────────
@@ -792,7 +902,7 @@ def main() -> None:
             g, coords, vals_local,
             measure="clustering", graph_label=label,
             community_idx=args.community, top_k=args.top_k,
-            out_path=out_dir / f"clustering_coefficient_{suffix}.png",
+            out_path=graphs_dir / f"clustering_coefficient_{suffix}.png",
             dpi=args.dpi,
         )
 
@@ -808,22 +918,14 @@ def main() -> None:
             g, graph_label=label,
             community_idx=args.community,
             apl=apl,
-            out_path=out_dir / f"path_length_distribution_{suffix}.png",
+            out_path=metrics_dir / f"path_length_distribution_{suffix}.png",
             dpi=args.dpi,
         )
 
     # ── Summary ───────────────────────────────────────────────────────────────
-    files = sorted(out_dir.glob("*.png"))
-    print(f"\n{'─'*60}")
-    print(f"All outputs saved to: {out_dir}")
-    print(f"Total files: {len(files)}")
-    for f in files:
-        print(f"  {f.name}")
-
     # Write a plain-text summary with min/max/max-abs and top-K lists
     write_summary(out_dir, args.community, graphs, raw_results,
                   scalar_results, top_k=args.top_k)
-
 
 if __name__ == "__main__":
     main()
