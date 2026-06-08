@@ -13,8 +13,10 @@
 - [Research Question](#research-question)
 - [Hypothesis](#hypothesis)
 - [Methodological Pipeline](#methodological-pipeline)
-- [Repository Layout](#repository-layout)
-- [Quick Start](#quick-start)
+- [Major Implementations](#major-implementations)
+- [Installation](#installation)
+- [Usage](#usage)
+- [Quick Examples and Tips](#quick-examples-and-tips)
 - [Expected Outputs](#expected-outputs)
 - [Interpretation Guide](#interpretation-guide)
 - [Acknowledgements](#acknowledgements)
@@ -69,18 +71,86 @@ Different centrality measures capture different structural roles:
 
 ---
 
-## Repository Layout
-```text
-pling_output/  # directory for `pling` distance outputs
-  └─ ...   # input distance files used by this repo
+## Major Implementations
+
+- `pling_igraph_viz.py`: builds attributed `igraph.Graph` objects from a
+  community JSON + `typing.tsv`, computes a three-phase hierarchical
+  layout (global FR → per-subcommunity KK/FR → centroid repulsion) and
+  renders two PNG figures per community: the full graph and the no-hub
+  graph.  The script requires a single `--out-dir` and always writes
+  both `community_<n>.png` and `community_<n>_no_hubs.png` into it.
+
+- `pling_igraph_analysis.py`: computes node-level centrality measures
+  (degree, betweenness, closeness, eigenvector), clustering coefficients
+  and path-length statistics; produces per-measure visualisations and a
+  text summary (`summary_community_<n>.txt`) with raw metrics. Notes:
+  - Closeness summary uses the Wasserman–Faust (WF) normalized value
+    for disconnected graphs (recommended for validation/consistency).
+  - Eigenvector centrality is computed only on the largest connected
+    component; nodes in smaller components receive `0.0`.
+
+All scripts keep vertex/edge attributes (name, color, is_hub, subcom;
+sd/td/lbl) so you can import the graphs into other analysis pipelines.
+
+## Installation
+
+Recommended: use a conda environment (tested as `igraph_1`). Example:
+
+```bash
+conda create -n igraph_1 -c conda-forge python=3.10 python-igraph matplotlib pandas numpy powerlaw
+conda activate igraph_1
 ```
 
----
+Alternatively install with `pip`:
 
-## Quick Start
-1. Place `pling`-generated distance outputs in `pling_output/`.
-2. Run the igraph analysis scripts from this repository. # In progress: we will provide example scripts to load distances, build graphs, and compute metrics.
-3. Review generated centrality rankings, community assignments, and graph summaries. # In progress: we will provide example outputs and interpretation guides to help understand the results.
+```bash
+pip install igraph matplotlib pandas numpy powerlaw
+```
+
+## Usage
+
+Render visualisations (both full and no-hub PNGs):
+
+```bash
+python3 pling_igraph_viz.py --json path/to/community_0.json \
+    --typing path/to/typing.tsv --out-dir igraph_output_pling --dpi 200
+```
+
+Run full centrality analysis and produce PNGs + summary text:
+
+```bash
+python3 pling_igraph_analysis.py --json path/to/community_0.json \
+    --typing path/to/typing.tsv --out-dir igraph_output_pling --community 0 --dpi 200
+```
+
+Outputs will be written under `--out-dir` (example `igraph_output_pling/`):
+
+- `degree_centrality_full.png`, `degree_centrality_no_hubs.png`, etc.
+- `degree_distribution_full.png`, `..._no_hubs.png` (degree distributions)
+- `summary_community_0.txt` — raw numeric summary and top-K lists
+- `path_length_histogram_*.png` (average path length / distribution)
+
+## Notes and Recommendations
+
+- Use the normalized metrics for plotting and for cross-graph comparisons;
+  the summary file contains raw metrics for degree/betweenness/eigenvector
+  but closeness is reported using the WF-normalized value due to
+  disconnected components. This keeps validation consistent.
+- Eigenvector centrality is restricted to the largest connected component
+  to avoid spurious mixing across disconnected pieces.
+
+## Quick Examples and Tips
+
+- To re-run the example community used for testing (if present):
+
+```bash
+conda activate igraph_1
+python3 pling_igraph_viz.py --json raw_pling_example_output/batches/community_0.json \
+    --typing raw_pling_example_output/typing.tsv --out-dir igraph_output_pling --dpi 200
+
+python3 pling_igraph_analysis.py --json raw_pling_example_output/batches/community_0.json \
+    --typing raw_pling_example_output/typing.tsv --out-dir igraph_output_pling --community 0 --dpi 200
+```
 
 ---
 
