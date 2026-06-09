@@ -1,7 +1,9 @@
+import numpy as np
 import pandas as pd
 import igraph as ig
 import matplotlib.pyplot as plt
 import powerlaw
+import math
 
 
 #-- ROUTES --------------------------------------------------------------------
@@ -102,25 +104,36 @@ def powerlaw_plot(degrees: list[int],
     #defree = 0 gets filtered out
     valid_deg = [d for d in degrees if d > 0]
 
-    fit = powerlaw.Fit(valid_deg, discrete=True, verbose=False) #fit data
+    if len(valid_deg) < 2:
+        print("No hay suficientes datos para ajuste")
+        return
+    
+    plt.figure(figsize=(8, 6))
+
+    fit = powerlaw.Fit(valid_deg, discrete=True) #fit data
 
     #plot
-    plt.figure(figsize=(8, 6))
-    fit.plot_pdf(linear_bins=True, color='r', label='Linear-binned PDF')  #linear bins 
-    fit.plot_pdf(color='b', label='Log-binned PDF')                        #log bins
+    fit.plot_pdf(color='red', linear_bins=True, marker='o', linestyle='', alpha=0.7, label='Empírico (Linear Bins)')  #lineal
+    
+    fit.plot_pdf(color='blue', marker='x', linestyle='', alpha=0.7, label='Empírico (Log Bins)')                      #log
     
     #FIT
-    fit.power_law.plot_pdf(color='g', linestyle='--', label='PowerLaw Fit Line')
+    fit.power_law.plot_pdf(color='black', linestyle='--', label='PowerLaw Fit Line')
 
     #Fformatting
-    plt.title(title)
+    plt.title(title, fontweight='bold')
     plt.xlabel("Grado (k)")
     plt.ylabel("Probabilidad P(k)")
-    plt.legend()
-    plt.grid(True, alpha=0.3)
+
+    plt.xscale('log')
+    plt.yscale('log')
+
+    plt.grid(True, which="both", ls='--', alpha=0.5)
+    plt.legend(loc='best')
 
     #save
-    plt.savefig(filename, dpi=300, bbox_inches='tight') 
+    plt.tight_layout()
+    plt.savefig(filename, dpi=300) 
     plt.close()
 
 
@@ -141,14 +154,22 @@ def calc_centralities(graph: ig.Graph,
     closeness = graph.closeness()
     eigenvector = graph.eigenvector_centrality(directed=False)
 
+    clustering_local = graph.transitivity_local_undirected()
+    clustering_local_clean = [0 if math.isnan(node) else node for node in clustering_local]
+
+
     #all in one DF 
     df_metrics = pd.DataFrame({
         "Plasmid": names,
         "Degree": degrees,
         "Betweenness": betweenness,
         "Closeness": closeness,
-        "Eigenvector": eigenvector
+        "Eigenvector": eigenvector,
+        "Clustering Local": clustering_local_clean
     })
+
+    clustering_global = graph.transitivity_undirected()
+    avg_path = graph.average_path_length(directed=False, unconn=True)
 
     #print 5 highest for each measurement
     print(f"Top 5 nodos Núcleo (Degree) {graph_name}:")
@@ -163,7 +184,67 @@ def calc_centralities(graph: ig.Graph,
     print(f"Top 5 Accesibilidad (Closeness) {graph_name}:")
     print(df_metrics.sort_values(by="Closeness", ascending=False).head(5)[["Plasmid", "Closeness"]].to_string(index=False))
 
+    print(f"Clustering Global: {clustering_global} | Avg Path Length: {avg_path}")
+
     return df_metrics
+
+
+#-- TOPOLOGICAL VIS ----------------------------------------------------
+def plot_top_centrality(graph: ig.Graph,
+                        df: pd.DataFrame,
+                        metric: str,
+                        filename: str,
+                        top: int = 5) -> None:
+    """Draws network highlighting nodes according to the metric value associated"""
+
+    if df.empty or metric not in df.columns:
+        print(f"No se puede graficar {metric}, no se encontraron datos")
+        return
+    
+    plt.figure(figsize=(10, 10))
+
+    #layout with fruchterman reignold
+    layout = graph.layout_fruchterman_reingold()
+    coords = np.array(layout.coords)
+
+    #extracting values 
+    values = df[metric].values
+    #extract plasmid names from df
+    names = df["Plasmid"].values if "Plasmid" in df.columns else df.iloc[:, 0].values
+
+    v_min, v_max = min(values), max(values)
+    rango = v_max - v_min if v_max != v_min else 1
+    values_normalized = (values - v_min) / rango #for [0, 1]
+
+    for arista in graph.es:
+        source, target = arista.tuple
+        x = [coords[source, 0], coords[target, 0]]
+        y = [coords[source, 1], coords[target, 1]]
+        plt.plot(x, y, color="#E0E0E0", linewidth=0.8, zorder=1)
+
+    colours = plt.cm.plasma(values_normalized)
+    sizes = 60 + (400 * values_normalized)
+
+    plt.scatter(coords[:, 0], coords[:, 1], s=sizes, c=colours, edgecolors='white',
+                linewidths=0.5, zorder=2)
+    
+    top_indexes = np.argsort(values)[-top:]
+
+    for idx in top_indexes:
+        plt.text(coords[idx, 0], coords[idx, 1], names[idx], 
+                 fontsize=9, ha='center', va='bottom', fontweight='bold', zorder=3,
+                 bbox=dict(facecolor='white', alpha=0.7, edgecolor='none', pad=0.5))
+        
+    #final visualization
+    plt.title(f"Distribución Topológica - {metric}", fontsize=14, fontweight='bold')
+    plt.axis('off')
+    
+    plt.tight_layout()
+    plt.savefig(filename, dpi=300, facecolor='white')
+    plt.close()
+
+
+
 
 
 
@@ -207,6 +288,51 @@ def gen_all_histograms(df_full: pd.DataFrame,
 
 
 
+def plot_path_len_hist(graph: ig.Graph,
+                       title: str,
+                       filename: str) -> None:
+    """Calculates and plots histogram for distances of minimal routes between pairs
+    of nodes"""
+    print(f"   ->  Generando Histograma de Rutas: {title}")
+
+    #distances matrix
+    dist_matrix = np.array(graph.distances())
+
+    #get upper triangle avoiding repetition of pairs, k=1 doesn't include diagonal
+    upper_tri = dist_matrix[np.triu_indices_from(dist_matrix, k=1)]
+
+    #filter infinite nodes (not conected)
+    valid_paths = upper_tri[np.isfinite(upper_tri)]
+
+    if len(valid_paths) == 0:
+        print("No hay rutas para graficar")
+        return
+    
+    plt.figure(figsize=(8, 6))
+
+    max_dist = int(np.max(valid_paths))
+    bins = np.arange(1, max_dist, + 2) - 0.5
+
+    plt.hist(valid_paths, bins=bins, color="2ca02c", edgecolor="black", alpha=0.7)
+
+    #calculate avg
+    avg_path = np.mean(valid_paths)
+    plt.axvline(avg_path, color='red', linestyle='dashed', linewidth=2, 
+                label=f'Promedio: {avg_path:.2f} saltos')
+    
+    plt.title(title, fontsize=14, fontweight='bold')
+    plt.xlabel("Largo de Ruta (saltos)", fontsize=12)
+    plt.ylabel("Frecuencia (Pares de plásmidos)", fontsize=12)
+    plt.xticks(range(1, max_dist + 1)) 
+    plt.legend(loc='upper right')
+    plt.grid(axis='y', alpha=0.4)
+
+    plt.tight_layout()
+    plt.savefig(filename, dpi=300, facecolor='white')
+    plt.close()
+
+
+
 
 if __name__ == "__main__":
     df_distances, df_communities, hub_list = load_data()
@@ -236,6 +362,29 @@ if __name__ == "__main__":
         gen_all_histograms(df_full_metrics, df_filtered_metrics)
     else:
         gen_all_histograms(df_full_metrics, pd.DataFrame())
+
+    print("Generando redes topológicas ...")
+    plot_top_centrality(full_graph, df_full_metrics, "Betweenness", 
+                        "output_analisis/topologia_betweenness_full.png", top=5)
+    
+    plot_top_centrality(full_graph, df_full_metrics, "Degree", 
+                        "output_analisis/topologia_degree_full.png", top=5)
+    
+    if not df_filtered_metrics.empty:
+        plot_top_centrality(filtered_graph, "Betweenness", df_filtered_metrics,
+                            "output_analisis/topologia_betweenness_filtered.png", top=5)
+        
+    print("Generando histogramas de rutas (Avg. Path Length) ...")
+
+    plot_path_len_hist(full_graph, "Distribucion de Rutas (Completo)",
+                       "output_analisis/path_length_full.png")
+    
+    if filtered_graph.vcount() > 0:
+        plot_path_len_hist(filtered_graph, "Distribucion de rutas (sin hubs)",
+                           "output_analisis/path_length_filtered.png")
+    
+
+
 
 
 
