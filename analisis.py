@@ -311,9 +311,9 @@ def plot_path_len_hist(graph: ig.Graph,
     plt.figure(figsize=(8, 6))
 
     max_dist = int(np.max(valid_paths))
-    bins = np.arange(1, max_dist, + 2) - 0.5
+    bins = np.arange(1, max_dist + 2) - 0.5
 
-    plt.hist(valid_paths, bins=bins, color="2ca02c", edgecolor="black", alpha=0.7)
+    plt.hist(valid_paths, bins=bins, color="#2ca02c", edgecolor="black", alpha=0.7)
 
     #calculate avg
     avg_path = np.mean(valid_paths)
@@ -371,7 +371,7 @@ if __name__ == "__main__":
                         "output_analisis/topologia_degree_full.png", top=5)
     
     if not df_filtered_metrics.empty:
-        plot_top_centrality(filtered_graph, "Betweenness", df_filtered_metrics,
+        plot_top_centrality(filtered_graph, df_filtered_metrics, "Betweenness",
                             "output_analisis/topologia_betweenness_filtered.png", top=5)
         
     print("Generando histogramas de rutas (Avg. Path Length) ...")
