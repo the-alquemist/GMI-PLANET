@@ -360,9 +360,15 @@ def render_measure_distribution(values: list,
     fig, axes = plt.subplots(2, 3, figsize=(18, 10))
     fig.patch.set_facecolor("white")
 
-    # Col 0: exact counts for discrete (degree), histogram for continuous
-    raw_fn    = raw_frequency if discrete else raw_histogram
-    raw_title = "Raw frequency" if discrete else "Raw histogram"
+    # Col 0: raw_frequency for ALL measures.
+    # For degree (discrete): groups identical integer values → meaningful counts.
+    # For continuous measures (betweenness, closeness, eigenvector): floats that
+    # happen to be identical across nodes still group correctly, giving one point
+    # per unique value rather than collapsing everything into sqrt(n) histogram
+    # bins.  Betweenness has max_count=19, closeness WF max_count=21, so the
+    # y-axis carries real information rather than being a flat line at y=1.
+    raw_fn    = raw_frequency
+    raw_title = "Raw frequency"
     configs = [
         (raw_title,                    raw_fn,         {},                         False),
         ("Linear bins",                bin_frequency,  {},                         False),
