@@ -116,6 +116,7 @@ def load_graphs(json_path: str, typing_path: str):
 
 # ── Centrality computations ───────────────────────────────────────────────────
 
+# Core nodes, may highlight that they share a certain pool of genes, but not necessarily a skeleton.
 def degree_centrality(g: ig.Graph, normalized: bool = True) -> list[float]:
     """Degree centrality measures direct neighbourhood size.
 
@@ -130,7 +131,7 @@ def degree_centrality(g: ig.Graph, normalized: bool = True) -> list[float]:
         return [0.0 for _ in degrees]
     return [d / (n - 1) for d in degrees]
 
-
+# Bridge nodes, while understood as useful for gene propagation, may be more accurately described as the most shared genes between nodes/communities.
 def betweenness_centrality(g: ig.Graph, normalized: bool = True) -> list[float]:
     """Betweenness centrality measures shortest-path brokerage.
 
@@ -146,7 +147,7 @@ def betweenness_centrality(g: ig.Graph, normalized: bool = True) -> list[float]:
         return [0.0 for _ in raw]
     return [b / denom for b in raw]
 
-
+# Centric nodes, reach the most distant extremes of the graph in a minimum number of steps, share a minimum global set of genes for the entire graph.
 def closeness_centrality(g: ig.Graph, normalized: bool = True) -> list[float]:
     """Closeness centrality measures how close a node is to others.
 
@@ -172,7 +173,7 @@ def closeness_centrality(g: ig.Graph, normalized: bool = True) -> list[float]:
             result.append(n_reach ** 2 / ((n - 1) * sum_dist))
     return result
 
-
+# Influence nodes, still somewhat abstract with plasmids, check
 def eigenvector_centrality(g: ig.Graph, normalized: bool = True) -> list[float]:
     """Eigenvector centrality measures influence via well-connected neighbours.
 
@@ -204,6 +205,8 @@ def eigenvector_centrality(g: ig.Graph, normalized: bool = True) -> list[float]:
 
 # ── Clustering coefficient & average path length ──────────────────────────────
 
+# Identifys plasmids that are similar to each other, most likely by Incompatibility Group (check)
+# In the fuchsia cluster, if the distance is very short they may correspond to the same plasmid.
 def local_clustering_coefficient(g: ig.Graph) -> list[float]:
     """Local clustering coefficient for every vertex.
 
