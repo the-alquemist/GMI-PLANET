@@ -1,0 +1,45 @@
+=================================================================
+  DUPLICATION–DIVERGENCE NETWORK  —  STATISTICS
+  Generated: 2026-07-07 17:11:04
+=================================================================
+
+── Generation parameters ──────────────────────────────────
+  N                         : 200
+  n0 (seed nodes)           : 5
+  p0 (ER seed prob.)        : 0.6
+  σ (edge retention)        : 0.5
+  p (parent edge)           : 0.2
+  ε (novel edges)           : 0.01
+  degree_bias               : True
+  seed                      : 42
+  duplication attempts      : 212
+
+── Graph structure ─────────────────────────────────────────
+  Nodes               : 200
+  Edges               : 682
+  Density             : 0.03427
+  Connected components: 1
+
+── Degree distribution ─────────────────────────────────────
+  min         : 1
+  max         : 30
+  mean        : 6.8200
+  std         : 4.8557
+  Fitted α    : 2.7275
+  Note: α is an emergent property, not a direct
+  function of σ/ε at N=200 — see docstring.
+
+── Topology ────────────────────────────────────────────────
+  Global clustering (transitivity) : 0.07302
+  Mean local clustering coeff.     : 0.06294
+  Average path length              : 3.0216
+── Optimisation note ───────────────────────────────────────
+  σ controls graph density (mean degree) reliably:
+    σ↑ → more edges inherited → higher mean degree
+    σ↓ → fewer edges retained → lower mean degree
+  ε adds random novel edges, also increasing mean degree.
+
+  The fitted power-law exponent α ≈ 2.6–2.9 across the full
+  σ range at N=200, with high seed-to-seed variance.  To
+  study α–σ relationships reliably, use N ≥ 1000.
+=================================================================

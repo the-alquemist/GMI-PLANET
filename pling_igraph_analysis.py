@@ -639,6 +639,101 @@ def render_path_length_distribution(g: ig.Graph,
     print(f"  Saved → {out_path.name}")
 
 
+def render_combined_centrality_distribution(
+        centrality_values: dict[str, list],
+        graph_label: str,
+        community_idx: int,
+        out_path: Path,
+        dpi: int = 200) -> None:
+    """Single log-log panel showing the distribution of all four centrality
+    measures overlaid on the same axes, using log-spaced bins.
+
+    Parameters
+    ----------
+    centrality_values : dict mapping measure key → per-node value list
+                        (degree, betweenness, closeness, eigenvector)
+    graph_label       : e.g. "Full graph" or "No-hub graph"
+    community_idx     : community number for title
+    out_path          : output PNG path
+    dpi               : output resolution
+    """
+    # Representative colour from each colormap (evaluated at 0.75 = dark shade)
+    measure_styles = {
+        "degree":      (_CMAPS["degree"](0.75),     "Degree",      "o"),
+        "betweenness": (_CMAPS["betweenness"](0.75),"Betweenness", "s"),
+        "closeness":   (_CMAPS["closeness"](0.75),  "Closeness (WF)", "^"),
+        "eigenvector": (_CMAPS["eigenvector"](0.75),"Eigenvector", "D"),
+    }
+
+    fig, ax = plt.subplots(figsize=(9, 7))
+    fig.patch.set_facecolor("white")
+    plotted_any = False
+
+    for measure, (color, label, marker) in measure_styles.items():
+        vals = centrality_values.get(measure)
+        if vals is None:
+            continue
+
+        # Keep only positive values, then normalise to [0, 1]
+        positive = [v for v in vals if v > 0]
+        if len(positive) < 5:
+            continue
+        v_max = max(positive)
+        normed = [v / v_max for v in positive]
+
+        # Log-span check: need ≥ 1 decade for log bins to be meaningful
+        log_span = math.log10(max(normed) / min(normed))
+        if log_span < 1.0:
+            # Fall back to linear bins so the measure still appears
+            try:
+                x, y = bin_frequency(normed, logarithmic_bins=False)
+            except Exception:
+                continue
+        else:
+            try:
+                x, y = bin_frequency(normed, logarithmic_bins=True)
+            except Exception:
+                continue
+
+        pairs = [(xi, yi) for xi, yi in zip(x, y)
+                 if xi > 0 and yi > 0
+                 and not (isinstance(yi, float) and math.isnan(yi))]
+        if not pairs:
+            continue
+
+        xs, ys = zip(*pairs)
+        ax.scatter(xs, ys, marker=marker, color=color, s=45, alpha=0.85,
+                   label=label, zorder=3)
+        # Thin connecting line to show trend
+        ax.plot(xs, ys, color=color, lw=0.8, alpha=0.4, zorder=2)
+        plotted_any = True
+
+    if not plotted_any:
+        plt.close(fig)
+        print(f"  Skipping combined distribution for {graph_label} "
+              f"(insufficient data for all measures)")
+        return
+
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.set_xlabel("Normalised centrality value  [0, 1]", fontsize=11)
+    ax.set_ylabel("Probability density", fontsize=11)
+    ax.tick_params(labelsize=9)
+    ax.legend(fontsize=9, framealpha=0.85, title="Measure",
+              title_fontsize=9)
+    ax.set_title(
+        f"Community {community_idx} – Centrality distributions (log-log, log bins)\n"
+        f"{graph_label}  |  values normalised per measure to [0, 1]",
+        fontsize=12, fontweight="bold"
+    )
+
+    plt.tight_layout()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(out_path, dpi=dpi, bbox_inches="tight", facecolor="white")
+    plt.close(fig)
+    print(f"  Saved → {out_path.name}")
+
+
 def print_top_k(g: ig.Graph, values: list[float], measure: str,
                 graph_label: str, k: int = 10) -> None:
     """Print the top-K plasmids ranked by a centrality measure."""
@@ -827,7 +922,7 @@ def main() -> None:
         vals_raw = closeness_centrality(g, normalized=False)
         vals_norm = closeness_centrality(g, normalized=True)
         # On disconnected graphs the raw reachable-set value is not stable
-        # for cross-graph validation, so keep the WF-normalized values here.
+        # for cross-graph validation, so we keep the WF-normalized values here.
         raw_results["closeness"][suffix] = vals_norm
         norm_results["closeness"][suffix] = vals_norm
         print_top_k(g, vals_norm, "closeness", label, k=args.top_k)
@@ -930,6 +1025,32 @@ def main() -> None:
             out_path=metrics_dir / f"path_length_distribution_{suffix}.png",
             dpi=args.dpi,
         )
+
+    # ── 7. Combined centrality distribution (1 × 1 log-log panel) ────────────
+    print("\n── Combined Centrality Distribution ───────────────────────────")
+    for g, coords, label, suffix in graphs:
+        combined_vals = {
+            "degree":      norm_results["degree"][suffix],
+            "betweenness": norm_results["betweenness"][suffix],
+            "closeness":   norm_results["closeness"][suffix],
+            "eigenvector": norm_results["eigenvector"][suffix],
+        }
+        render_combined_centrality_distribution(
+            centrality_values = combined_vals,
+            graph_label       = label,
+            community_idx     = args.community,
+            out_path          = metrics_dir / f"combined_distribution_{suffix}.png",
+            dpi               = args.dpi,
+        )
+
+    # ── 8. Export graphs ──────────────────────────────────────────────────────
+    print("\n── Exporting graphs ───────────────────────────────────────────")
+    for g, _, label, suffix in graphs:
+        for fmt, writer in [("graphml", g.write_graphml),
+                             ("gml",     g.write_gml)]:
+            p = out_dir / f"community_{args.community}_{suffix}.{fmt}"
+            writer(str(p))
+            print(f"  Saved → {p.name}")
 
     # ── Summary ───────────────────────────────────────────────────────────────
     # Write a plain-text summary with min/max/max-abs and top-K lists
