@@ -18,6 +18,10 @@ Graph: Full graph (with hub nodes)
 
   Global Clustering Coefficient (transitivity) : 0.594091
   Average Path Length (reachable pairs)         : 3.009934
+  Degree Centrality power-law fit (igraph) : alpha=8.531586, xmin=40.000000
+  Betweenness Centrality power-law fit (igraph) : alpha=1.736991, xmin=48.582851
+  Closeness Centrality power-law fit (igraph) : alpha=16.050042, xmin=0.002500
+  Eigenvector Centrality power-law fit (igraph) : alpha=2.614022, xmin=0.286136
 
   Degree Centrality
     min     = 1.000000
@@ -83,13 +87,13 @@ Graph: Full graph (with hub nodes)
        1. pIH290_0.23                       1.000000 ★
        2. pIH290_0.3                        0.981863
        3. pVA1505_61                        0.939948
-       4. pVA1835_58_B                      0.935498
-       5. pVA791_57                         0.935498
-       6. pVA1393_58                        0.935498
-       7. pVA1626_57                        0.935498
-       8. pVA1722_58                        0.935498
-       9. pVA61_57                          0.935498
-      10. pVA1825_57                        0.935498
+       4. pVA524_58                         0.935498
+       5. pVA1393_58                        0.935498
+       6. pVA1835_58_B                      0.935498
+       7. pVA61_57                          0.935498
+       8. pVA754_57                         0.935498
+       9. pVA767_57                         0.935498
+      10. pVA791_57                         0.935498
 
   Local Clustering Coefficient
     min     = 0.000000
@@ -118,6 +122,10 @@ Graph: No-hub graph
 
   Global Clustering Coefficient (transitivity) : 0.690344
   Average Path Length (reachable pairs)         : 3.060343
+  Degree Centrality power-law fit (igraph) : alpha=34.463345, xmin=40.000000
+  Betweenness Centrality power-law fit (igraph) : alpha=1.863723, xmin=67.056476
+  Closeness Centrality power-law fit (igraph) : alpha=2.100058, xmin=0.001499
+  Eigenvector Centrality power-law fit (igraph) : alpha=2.106869, xmin=0.139023
 
   Degree Centrality
     min     = 0.000000
@@ -180,16 +188,16 @@ Graph: No-hub graph
     mean    = 0.261523
     std     = 0.336571
     Top-10:
-       1. pVA1825_57                        1.000000
-       2. pVA527_58                         1.000000
-       3. pVA754_57                         1.000000
-       4. pVA767_57                         1.000000
-       5. pVA1505_61                        1.000000
-       6. pVA1722_58                        1.000000
-       7. pVA1835_58_B                      1.000000
-       8. pVA61_57                          1.000000
-       9. pVA1393_58                        1.000000
-      10. pVA1626_57                        1.000000
+       1. pVA1626_57                        1.000000
+       2. pVA767_57                         1.000000
+       3. pVA1825_57                        1.000000
+       4. pVA524_58                         1.000000
+       5. pVA527_58                         1.000000
+       6. pVA61_57                          1.000000
+       7. pVA754_57                         1.000000
+       8. pVA1505_61                        1.000000
+       9. pVA1835_58_B                      1.000000
+      10. pVA791_57                         1.000000
 
   Local Clustering Coefficient
     min     = 0.000000

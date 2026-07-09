@@ -32,7 +32,7 @@ Usage
 
 Dependencies
 ------------
-    pip install igraph matplotlib pandas numpy powerlaw
+    pip install igraph matplotlib pandas numpy
     (pling_igraph_viz.py must be importable from the same directory)
 """
 
@@ -52,7 +52,7 @@ from matplotlib import cm
 from matplotlib.colors import Normalize, to_hex
 import numpy as np
 import pandas as pd
-import powerlaw
+from igraph.statistics import power_law_fit
 
 # pling_igraph_viz.py must be on the path
 sys.path.insert(0, str(Path(__file__).parent))
@@ -130,6 +130,24 @@ def degree_centrality(g: ig.Graph, normalized: bool = True) -> list[float]:
     if n <= 1:
         return [0.0 for _ in degrees]
     return [d / (n - 1) for d in degrees]
+
+
+def fit_power_law(values: list[float], discrete: bool = False) -> tuple[float, float] | None:
+    """Fit a power law to positive values with igraph.
+
+    Returns (alpha, xmin) when the fit succeeds, or None when there are
+    too few positive values or igraph cannot determine a fit.
+    """
+    data = [float(v) for v in values if v > 0]
+    if len(data) < 10:
+        return None
+    method = "discrete" if discrete else "continuous"
+    try:
+        fit = power_law_fit(data, xmin=None, method=method, p_precision=0.01)
+    except Exception:
+        return None
+    return float(fit.alpha), float(fit.xmin)
+
 
 # Bridge nodes, while understood as useful for gene propagation, may be more accurately described as the most shared genes between nodes/communities.
 def betweenness_centrality(g: ig.Graph, normalized: bool = True) -> list[float]:
@@ -268,7 +286,7 @@ def raw_frequency(data: list) -> tuple:
 
 
 def bin_frequency(data: list, logarithmic_bins: bool = False) -> tuple:
-    """Degree distribution using the powerlaw package binning.
+    """Histogram-based degree distribution for positive data.
 
     Parameters
     ----------
@@ -280,9 +298,21 @@ def bin_frequency(data: list, logarithmic_bins: bool = False) -> tuple:
     x : bin midpoints (float array)
     y : probability density in each bin (float array)
     """
-    x, y = powerlaw.pdf(data, linear_bins=not logarithmic_bins)
-    x = x[:-1]   # last element is the right edge of the final bin — discard
-    return x, y
+    values = np.asarray(data, dtype=float)
+    if values.size == 0:
+        return [], []
+    if values.min() == values.max():
+        return [float(values.min())], [1.0]
+
+    n_bins = max(5, int(math.sqrt(values.size)))
+    if logarithmic_bins:
+        edges = np.geomspace(values.min(), values.max(), n_bins + 1)
+    else:
+        edges = np.linspace(values.min(), values.max(), n_bins + 1)
+
+    counts, edges = np.histogram(values, bins=edges, density=True)
+    x = [(edges[i] + edges[i + 1]) / 2 for i in range(len(counts))]
+    return x, counts.tolist()
 
 
 def raw_histogram(data: list, n_bins: int = None) -> tuple:
@@ -327,7 +357,7 @@ def render_measure_distribution(values: list,
     ---------------------------
     Row 1 (linear y-axis):
         Col 1 – raw frequency / histogram
-        Col 2 – probability density, linear bins  (powerlaw package)
+        Col 2 – probability density, linear bins
         Col 3 – probability density, log-spaced bins
     Row 2 (log-log axes):
         Same three representations on log-log scale.
@@ -790,6 +820,13 @@ def write_summary(out_dir: Path, community_idx: int, graphs: list,
                 fh.write(f"  Global Clustering Coefficient (transitivity) : {global_cc:.6f}\n")
             if apl is not None:
                 fh.write(f"  Average Path Length (reachable pairs)         : {apl:.6f}\n")
+            power_law_results = scalar_results.get("power_law_fit", {})
+            for measure in ("degree", "betweenness", "closeness", "eigenvector"):
+                fit = power_law_results.get(measure, {}).get(suffix)
+                if fit is None:
+                    continue
+                alpha, xmin = fit
+                fh.write(f"  {_MEASURE_LABELS[measure]} power-law fit (igraph) : alpha={alpha:.6f}, xmin={xmin:.6f}\n")
             fh.write("\n")
 
             # ── Node-level measures ───────────────────────────────────────────
@@ -842,7 +879,8 @@ def main() -> None:
     measures = ("degree", "betweenness", "closeness", "eigenvector", "clustering")
     raw_results    = {m: {} for m in measures}
     norm_results   = {m: {} for m in measures}
-    scalar_results = {"global_clustering": {}, "average_path_length": {}}
+    scalar_results = {"global_clustering": {}, "average_path_length": {},
+                      "power_law_fit": {m: {} for m in ("degree", "betweenness", "closeness", "eigenvector")}}
 
     # ── Load both igraph objects ───────────────────────────────────────────────
     print("Loading graphs …")
@@ -868,6 +906,11 @@ def main() -> None:
         vals_norm = degree_centrality(g, normalized=True)
         raw_results["degree"][suffix] = vals_raw
         norm_results["degree"][suffix] = vals_norm
+        scalar_results["power_law_fit"]["degree"][suffix] = fit_power_law(g.degree(), discrete=True)
+        degree_fit = scalar_results["power_law_fit"]["degree"][suffix]
+        if degree_fit is not None:
+            alpha, xmin = degree_fit
+            print(f"  Degree power-law fit [{label}]: alpha={alpha:.4f}, xmin={xmin:.4f}")
         print_top_k(g, vals_norm, "degree", label, k=args.top_k)
 
         render_centrality_graph(
@@ -905,6 +948,11 @@ def main() -> None:
         # Six-panel distribution for raw (unnormalised) betweenness scores.
         # Raw integer-like counts expose the heavy tail more clearly than
         # normalised values, which compress everything into [0, 1].
+        scalar_results["power_law_fit"]["betweenness"][suffix] = fit_power_law(vals_raw)
+        betweenness_fit = scalar_results["power_law_fit"]["betweenness"][suffix]
+        if betweenness_fit is not None:
+            alpha, xmin = betweenness_fit
+            print(f"  Betweenness power-law fit [{label}]: alpha={alpha:.4f}, xmin={xmin:.4f}")
         render_measure_distribution(
             values       = vals_raw,
             measure_name = "Betweenness Centrality",
@@ -925,6 +973,11 @@ def main() -> None:
         # for cross-graph validation, so we keep the WF-normalized values here.
         raw_results["closeness"][suffix] = vals_norm
         norm_results["closeness"][suffix] = vals_norm
+        scalar_results["power_law_fit"]["closeness"][suffix] = fit_power_law(vals_raw)
+        closeness_fit = scalar_results["power_law_fit"]["closeness"][suffix]
+        if closeness_fit is not None:
+            alpha, xmin = closeness_fit
+            print(f"  Closeness power-law fit [{label}]: alpha={alpha:.4f}, xmin={xmin:.4f}")
         print_top_k(g, vals_norm, "closeness", label, k=args.top_k)
 
         render_centrality_graph(
@@ -956,6 +1009,11 @@ def main() -> None:
         vals_raw = vals_norm
         raw_results["eigenvector"][suffix] = vals_raw
         norm_results["eigenvector"][suffix] = vals_norm
+        scalar_results["power_law_fit"]["eigenvector"][suffix] = fit_power_law(vals_raw)
+        eigenvector_fit = scalar_results["power_law_fit"]["eigenvector"][suffix]
+        if eigenvector_fit is not None:
+            alpha, xmin = eigenvector_fit
+            print(f"  Eigenvector power-law fit [{label}]: alpha={alpha:.4f}, xmin={xmin:.4f}")
         print_top_k(g, vals_norm, "eigenvector", label, k=args.top_k)
 
         render_centrality_graph(

@@ -83,7 +83,9 @@ Different centrality measures capture different structural roles:
 - `pling_igraph_analysis.py`: computes node-level centrality measures
   (degree, betweenness, closeness, eigenvector), clustering coefficients
   and path-length statistics; produces per-measure visualisations and a
-  text summary (`summary_community_<n>.txt`) with raw metrics. Notes:
+  text summary (`summary_community_<n>.txt`) with raw metrics. The degree
+  distribution summary also reports an igraph-based power-law fit via
+  `igraph.statistics.power_law_fit`. Notes:
   - Closeness summary uses the Wasserman–Faust (WF) normalized value
     for disconnected graphs (recommended for validation/consistency).
   - Eigenvector centrality is computed only on the largest connected
@@ -97,14 +99,14 @@ sd/td/lbl) so you can import the graphs into other analysis pipelines.
 Recommended: use a conda environment (tested as `igraph_1`). Example:
 
 ```bash
-conda create -n igraph_1 -c conda-forge python=3.10 python-igraph matplotlib pandas numpy powerlaw
+conda create -n igraph_1 -c conda-forge python=3.10 python-igraph matplotlib pandas numpy
 conda activate igraph_1
 ```
 
 Alternatively install with `pip`:
 
 ```bash
-pip install igraph matplotlib pandas numpy powerlaw
+pip install igraph matplotlib pandas numpy
 ```
 
 ## Usage

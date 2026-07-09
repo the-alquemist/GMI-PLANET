@@ -1,6 +1,6 @@
 =================================================================
   DUPLICATION–DIVERGENCE NETWORK  —  STATISTICS
-  Generated: 2026-07-07 17:11:04
+  Generated: 2026-07-09 14:11:22
 =================================================================
 
 ── Generation parameters ──────────────────────────────────
@@ -12,34 +12,34 @@
   ε (novel edges)           : 0.01
   degree_bias               : True
   seed                      : 42
-  duplication attempts      : 212
+  duplication attempts      : 219
 
 ── Graph structure ─────────────────────────────────────────
   Nodes               : 200
-  Edges               : 682
-  Density             : 0.03427
+  Edges               : 627
+  Density             : 0.03151
   Connected components: 1
 
 ── Degree distribution ─────────────────────────────────────
   min         : 1
-  max         : 30
-  mean        : 6.8200
-  std         : 4.8557
-  Fitted α    : 2.7275
-  Note: α is an emergent property, not a direct
-  function of σ/ε at N=200 — see docstring.
+  max         : 28
+  mean        : 6.2700
+  std         : 4.4819
+  Degree power-law fit     : alpha=4.1006, xmin=10.0000
+  Betweenness power-law fit     : alpha=2.6612, xmin=256.9232
+  Closeness power-law fit     : alpha=14.8691, xmin=0.0017
+  Eigenvector power-law fit     : alpha=2.6055, xmin=0.1284
 
 ── Topology ────────────────────────────────────────────────
-  Global clustering (transitivity) : 0.07302
-  Mean local clustering coeff.     : 0.06294
-  Average path length              : 3.0216
-── Optimisation note ───────────────────────────────────────
+  Global clustering (transitivity) : 0.07905
+  Mean local clustering coeff.     : 0.05958
+  Average path length              : 3.1839
+── Model note ──────────────────────────────────────────────
   σ controls graph density (mean degree) reliably:
     σ↑ → more edges inherited → higher mean degree
     σ↓ → fewer edges retained → lower mean degree
   ε adds random novel edges, also increasing mean degree.
 
-  The fitted power-law exponent α ≈ 2.6–2.9 across the full
-  σ range at N=200, with high seed-to-seed variance.  To
-  study α–σ relationships reliably, use N ≥ 1000.
+  Power-law fits are reported as descriptive statistics only;
+  they are not used as control targets here.
 =================================================================

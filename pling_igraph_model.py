@@ -30,28 +30,14 @@ fragmentation, and isolation removal — reproduces scale-free degree
 distributions and short average path lengths without any explicit
 preferential-attachment rule.
 
-Parameter optimisation
-----------------------
+Model note
+----------
 σ (edge retention) primarily controls graph density: higher σ → more edges
 inherited → denser graph → lower mean degree heterogeneity.  ε (novel-edge
 probability) controls the fraction of cross-community "random" edges.
 
-Optimising σ or ε to match a target power-law exponent α* is problematic
-because α is nearly constant across a wide σ range (≈2.6–2.9) in this
-model at N=200, with high stochastic variance between seeds.  The fitted α
-from powerlaw.Fit is an unreliable optimisation target at these graph sizes.
-
-Instead, optimisation targets the MEAN DEGREE of the generated graph, which
-is a monotone, low-variance function of σ and ε and allows reliable
-convergence using scipy.optimize.minimize_scalar (Brent's method):
-
-    σ* = argmin |mean_degree(G_σ) − target_mean_degree|
-
-This is the principled approach: σ controls density, density controls
-connectivity, and the power-law tail shape is an emergent property that
-cannot be reliably steered by a single scalar at small N.  For larger N
-(≥1000) the α–σ relationship becomes more reliable and direct α fitting
-can be reintroduced.
+The fitted power-law exponent α is reported as a descriptive statistic,
+but it is not used as a control target in this script.
 
 Outputs (written to <out-dir>/duplication_divergence/)
 ------------------------------------------------------
@@ -70,26 +56,20 @@ Usage
     # Default run
     python3 pling_igraph_model.py --N 200 --sigma 0.5 --seed 42
 
-    # Optimise sigma to match a target mean degree (e.g. 7)
-    python3 pling_igraph_model.py --optimise sigma --target-degree 7
-
-    # Optimise epsilon to match a target mean degree
-    python3 pling_igraph_model.py --optimise epsilon --target-degree 5
-
 Dependencies
 ------------
-    pip install igraph matplotlib numpy scipy powerlaw
+    pip install igraph matplotlib numpy
     pling_igraph_analysis.py must be importable from the same directory.
 """
 
 import argparse
 import math
 import random
-import warnings
 from datetime import datetime
 from pathlib import Path
 
 import igraph as ig
+from igraph.statistics import power_law_fit
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -97,18 +77,6 @@ import matplotlib.patheffects as pe
 from matplotlib import cm
 from matplotlib.colors import Normalize, to_hex
 import numpy as np
-
-try:
-    import powerlaw as pl_pkg
-    _HAS_POWERLAW = True
-except ImportError:
-    _HAS_POWERLAW = False
-
-try:
-    from scipy.optimize import minimize_scalar
-    _HAS_SCIPY = True
-except ImportError:
-    _HAS_SCIPY = False
 
 from pling_igraph_analysis import (
     degree_centrality,
@@ -120,6 +88,7 @@ from pling_igraph_analysis import (
     average_path_length_metric,
     render_measure_distribution,
     render_path_length_distribution,
+    render_combined_centrality_distribution,
 )
 
 
@@ -144,22 +113,23 @@ def parse_args() -> argparse.Namespace:
                    help="Parent-child edge probability p (default 0.20)")
     p.add_argument("--epsilon",      type=float, default=0.01,
                    help="Novel-edge formation probability ε (default 0.01)")
-    p.add_argument("--degree-bias",  action="store_true", default=True,
-                   help="Select source node ∝ degree (default True)")
-    p.add_argument("--no-degree-bias", dest="degree_bias",
-                   action="store_false")
-    p.add_argument("--optimise",     choices=["sigma", "epsilon"],
-                   default=None,
-                   help="Parameter to auto-tune to match --target-degree")
-    p.add_argument("--target-degree", type=float, default=6.0,
-                   help="Target mean degree for optimisation (default 6.0)")
-    p.add_argument("--opt-reps",     type=int, default=5,
-                   help="Graph replicates per optimisation evaluation "
-                        "(more = less noise, slower; default 5)")
-    p.add_argument("--seed",         type=int,   default=42)
-    p.add_argument("--out-dir",      required=True,
+    p.add_argument("--degree-bias",
+                   type=lambda x: x.lower() not in ("false", "0", "no"),
+                   default=True, metavar="BOOL",
+                   help="Select source node ∝ degree: True (default) enables "
+                        "implicit preferential attachment; False uses uniform "
+                        "random selection.  Pass False/0/no to disable.")
+    p.add_argument("--seed", type=int, default=42,
+                   help="Random seed for reproducibility. The generation "
+                        "process is stochastic — fixing the seed guarantees "
+                        "identical graphs across runs. Change it to explore "
+                        "different realisations of the same parameters. "
+                        "(default 42)")
+    p.add_argument("--out-dir", required=True,
                    help="Output directory for generated network and metrics")
-    p.add_argument("--dpi",          type=int,   default=200)
+    p.add_argument("--dpi", type=int, default=200,
+                   help="Figure resolution in dots per inch. 200 is good for "
+                        "screen; use 300-600 for publication. (default 200)")
     return p.parse_args()
 
 
@@ -315,124 +285,21 @@ def generate_network(N: int, n0: int, p0: float,
 # Power-law fitting
 # ─────────────────────────────────────────────────────────────────────────────
 
-def fit_power_law_alpha(degrees: list[int]) -> float | None:
-    """Fit a discrete power-law to the positive degree values.
+def fit_power_law(values: list[float], discrete: bool = False) -> tuple[float, float] | None:
+    """Fit a power law to positive values with igraph.
 
-    Uses powerlaw.Fit with discrete=True (Clauset et al. 2009).
-    Returns None if powerlaw is unavailable or fewer than 10 data points.
-
-    IMPORTANT CAVEAT (documented in summary):
-    At N=200 the fitted α is nearly constant across σ values (≈2.6–2.9)
-    with high stochastic variance between seeds.  α should be interpreted
-    as a rough descriptor of the tail, not a precise parameter estimate.
+    Returns (alpha, xmin) when the fit succeeds, or None when there are
+    too few positive values or igraph cannot determine a fit.
     """
-    if not _HAS_POWERLAW:
-        return None
-    data = [d for d in degrees if d > 0]
+    data = [float(v) for v in values if v > 0]
     if len(data) < 10:
         return None
+    method = "discrete" if discrete else "continuous"
     try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            import logging
-            logging.disable(logging.CRITICAL)
-            fit = pl_pkg.Fit(data, discrete=True, verbose=False)
-            logging.disable(logging.NOTSET)
-        return float(fit.power_law.alpha)
+        fit = power_law_fit(data, xmin=None, method=method, p_precision=0.01)
     except Exception:
         return None
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Parameter optimisation — targets mean degree, not alpha
-# ─────────────────────────────────────────────────────────────────────────────
-
-def optimise_parameter(param: str,
-                       target_degree: float,
-                       N: int, n0: int, p0: float,
-                       sigma: float, p: float, epsilon: float,
-                       degree_bias: bool, seed: int,
-                       n_reps: int = 5) -> tuple[float, float]:
-    """Find the σ or ε value that minimises |mean_degree − target_degree|.
-
-    WHY MEAN DEGREE, NOT ALPHA?
-    ---------------------------
-    The fitted power-law exponent α is nearly constant across the σ range
-    [0.2, 0.8] in this model at N=200 (empirically ≈2.6–2.9 with large
-    seed-to-seed variance).  Using α as an optimisation target would make
-    the minimiser converge to a random value — the signal is too noisy.
-
-    Mean degree, by contrast, is a monotone, low-variance function of σ:
-      - σ↑ → more edges inherited → higher mean degree
-      - σ↓ → fewer edges retained → lower mean degree
-      - ε↑ → more novel edges     → higher mean degree
-
-    This makes mean degree a reliable, well-conditioned optimisation target.
-
-    Strategy
-    --------
-    For each candidate parameter value, generate n_reps independent graphs
-    (different seeds) and average their mean degrees.  Averaging reduces
-    stochastic noise before the optimiser (scipy minimize_scalar, Brent's
-    method) moves to the next candidate.  Brent's method requires the
-    objective to be unimodal in the search interval — mean degree is
-    monotone in σ and ε, satisfying this requirement.
-
-    Parameters
-    ----------
-    param         : "sigma" or "epsilon"
-    target_degree : desired mean degree of the generated graph
-    n_reps        : number of independent replications per evaluation
-                    (increase for less noise, at the cost of speed)
-
-    Returns
-    -------
-    (best_val, achieved_degree)
-    """
-    if not _HAS_SCIPY:
-        raise RuntimeError("scipy is required for optimisation.")
-
-    bounds = {"sigma": (0.05, 0.95), "epsilon": (0.001, 0.15)}[param]
-
-    def objective(val: float) -> float:
-        mean_degs = []
-        for rep in range(n_reps):
-            kw = dict(sigma=sigma, epsilon=epsilon)
-            kw[param] = val
-            g_tmp = generate_network(
-                N, n0, p0,
-                sigma=kw["sigma"], p=p, epsilon=kw["epsilon"],
-                degree_bias=degree_bias,
-                seed=seed + rep * 17,   # deterministic but spread seeds
-                verbose=False,
-            )
-            mean_degs.append(np.mean(g_tmp.degree()))
-        return abs(np.mean(mean_degs) - target_degree)
-
-    print(f"\n  Optimising {param} to achieve mean degree ≈ {target_degree:.1f}")
-    print(f"  Search bounds: {bounds}  |  {n_reps} reps per evaluation")
-    result    = minimize_scalar(objective, bounds=bounds, method="bounded",
-                                options={"xatol": 1e-3, "maxiter": 40})
-    best_val  = float(result.x)
-
-    # Estimate achieved mean degree at the optimum (5 final reps)
-    final_degs = []
-    for rep in range(5):
-        kw = dict(sigma=sigma, epsilon=epsilon)
-        kw[param] = best_val
-        g_tmp = generate_network(
-            N, n0, p0,
-            sigma=kw["sigma"], p=p, epsilon=kw["epsilon"],
-            degree_bias=degree_bias,
-            seed=seed + 1000 + rep,
-            verbose=False,
-        )
-        final_degs.append(np.mean(g_tmp.degree()))
-    achieved = float(np.mean(final_degs))
-
-    print(f"  Optimal {param} = {best_val:.4f}  →  "
-          f"mean degree = {achieved:.2f}  (target = {target_degree:.1f})")
-    return best_val, achieved
+    return float(fit.alpha), float(fit.xmin)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -513,10 +380,7 @@ def render_network(g: ig.Graph, coords: np.ndarray,
 # ─────────────────────────────────────────────────────────────────────────────
 
 def write_stats(g: ig.Graph, out_path: Path,
-                alpha_fitted: float | None,
-                optimised_param: str | None,
-                target_degree: float | None,
-                achieved_degree: float | None) -> None:
+                power_law_fits: dict[str, tuple[float, float] | None]) -> None:
     """Human-readable statistics summary."""
     degrees  = g.degree()
     comps    = g.connected_components()
@@ -545,11 +409,6 @@ def write_stats(g: ig.Graph, out_path: Path,
         for k, v in rows:
             fh.write(f"  {k:<26}: {v}\n")
 
-        if optimised_param:
-            fh.write(f"\n  Auto-tuned parameter    : {optimised_param}\n")
-            fh.write(f"  Target mean degree      : {target_degree:.2f}\n")
-            fh.write(f"  Achieved mean degree    : {achieved_degree:.2f}\n")
-
         fh.write("\n── Graph structure ─────────────────────────────────────────\n")
         fh.write(f"  Nodes               : {g.vcount()}\n")
         fh.write(f"  Edges               : {g.ecount()}\n")
@@ -564,12 +423,21 @@ def write_stats(g: ig.Graph, out_path: Path,
         fh.write(f"  max         : {max(degrees)}\n")
         fh.write(f"  mean        : {np.mean(degrees):.4f}\n")
         fh.write(f"  std         : {np.std(degrees):.4f}\n")
-        if alpha_fitted:
-            fh.write(f"  Fitted α    : {alpha_fitted:.4f}\n")
-            fh.write("  Note: α is an emergent property, not a direct\n")
-            fh.write("  function of σ/ε at N=200 — see docstring.\n")
+        degree_fit = power_law_fits.get("degree")
+        if degree_fit is not None:
+            alpha, xmin = degree_fit
+            fh.write(f"  Degree power-law fit     : alpha={alpha:.4f}, xmin={xmin:.4f}\n")
         else:
-            fh.write("  Fitted α    : (powerlaw package unavailable)\n")
+            fh.write("  Degree power-law fit     : (igraph power-law fit unavailable)\n")
+
+        for measure in ("betweenness", "closeness", "eigenvector"):
+            fit = power_law_fits.get(measure)
+            label = measure.capitalize()
+            if fit is not None:
+                alpha, xmin = fit
+                fh.write(f"  {label} power-law fit     : alpha={alpha:.4f}, xmin={xmin:.4f}\n")
+            else:
+                fh.write(f"  {label} power-law fit     : (igraph power-law fit unavailable)\n")
 
         fh.write("\n── Topology ────────────────────────────────────────────────\n")
         fh.write(f"  Global clustering (transitivity) : "
@@ -578,15 +446,14 @@ def write_stats(g: ig.Graph, out_path: Path,
                  f"{np.mean(cc_local):.5f}\n")
         fh.write(f"  Average path length              : {apl:.4f}\n")
 
-        fh.write("── Optimisation note ───────────────────────────────────────\n")
+        fh.write("── Model note ──────────────────────────────────────────────\n")
         fh.write(
             "  σ controls graph density (mean degree) reliably:\n"
             "    σ↑ → more edges inherited → higher mean degree\n"
             "    σ↓ → fewer edges retained → lower mean degree\n"
             "  ε adds random novel edges, also increasing mean degree.\n\n"
-            "  The fitted power-law exponent α ≈ 2.6–2.9 across the full\n"
-            "  σ range at N=200, with high seed-to-seed variance.  To\n"
-            "  study α–σ relationships reliably, use N ≥ 1000.\n"
+            "  Power-law fits are reported as descriptive statistics only;\n"
+            "  they are not used as control targets here.\n"
         )
         fh.write("=" * 65 + "\n")
 
@@ -606,24 +473,6 @@ def main() -> None:
     met_dir.mkdir(parents=True, exist_ok=True)
 
     sigma, epsilon = args.sigma, args.epsilon
-    achieved_degree = None
-
-    # ── Parameter optimisation ────────────────────────────────────────────────
-    if args.optimise:
-        if not _HAS_SCIPY:
-            print("[error] scipy is required for --optimise. Skipping.")
-        else:
-            best_val, achieved_degree = optimise_parameter(
-                param=args.optimise, target_degree=args.target_degree,
-                N=args.N, n0=args.n0, p0=args.p0,
-                sigma=sigma, p=args.p, epsilon=epsilon,
-                degree_bias=args.degree_bias, seed=args.seed,
-                n_reps=args.opt_reps,
-            )
-            if args.optimise == "sigma":
-                sigma   = best_val
-            else:
-                epsilon = best_val
 
     # ── Generate ──────────────────────────────────────────────────────────────
     print(f"\nGenerating network  "
@@ -634,9 +483,16 @@ def main() -> None:
         degree_bias=args.degree_bias, seed=args.seed,
     )
 
-    alpha_fitted = fit_power_law_alpha(g.degree())
-    if alpha_fitted:
-        print(f"  Fitted power-law α = {alpha_fitted:.4f}")
+    power_law_fits = {
+        "degree":      fit_power_law(degree_centrality(g, normalized=False), discrete=True),
+        "betweenness": fit_power_law(betweenness_centrality(g, normalized=False)),
+        "closeness":   fit_power_law(closeness_centrality(g, normalized=True)),
+        "eigenvector": fit_power_law(eigenvector_centrality(g, normalized=True)),
+    }
+    for measure, fit in power_law_fits.items():
+        if fit is not None:
+            alpha, xmin = fit
+            print(f"  {measure.capitalize()} power-law fit: alpha={alpha:.4f}, xmin={xmin:.4f}")
 
     # ── Layout: native igraph FR (no pling edge attrs required) ───────────────
     # hybrid_layout from pling_igraph_viz requires 'td' edge attributes
@@ -668,6 +524,14 @@ def main() -> None:
             vals = fn(g, normalized=True)
         else:
             vals = fn(g, normalized=False)
+        if fname == "degree":
+            power_law_fits["degree"] = fit_power_law(vals, discrete=True)
+        elif fname == "betweenness":
+            power_law_fits["betweenness"] = fit_power_law(vals)
+        elif fname == "closeness":
+            power_law_fits["closeness"] = fit_power_law(vals)
+        elif fname == "eigenvector":
+            power_law_fits["eigenvector"] = fit_power_law(vals)
         render_measure_distribution(
             values        = vals,
             measure_name  = measure_name,
@@ -678,6 +542,23 @@ def main() -> None:
             dpi           = args.dpi,
         )
 
+    # ── Combined centrality distribution (1 × 1 log-log panel) ───────────────
+    # Collect the same four measure values used above into a dict and pass
+    # them to the shared function imported from pling_igraph_analysis.
+    combined_vals = {
+        "degree":      degree_centrality(g,      normalized=True),
+        "betweenness": betweenness_centrality(g, normalized=True),
+        "closeness":   closeness_centrality(g,   normalized=True),
+        "eigenvector": eigenvector_centrality(g, normalized=True),
+    }
+    render_combined_centrality_distribution(
+        centrality_values = combined_vals,
+        graph_label       = graph_label,
+        community_idx     = 0,
+        out_path          = met_dir / "combined_distribution.png",
+        dpi               = args.dpi,
+    )
+
     # Path-length histogram
     apl = average_path_length_metric(g)
     render_path_length_distribution(
@@ -687,13 +568,16 @@ def main() -> None:
 
     # ── Summary ───────────────────────────────────────────────────────────────
     write_stats(g, out_dir / "summary.txt",
-                alpha_fitted    = alpha_fitted,
-                optimised_param = args.optimise,
-                target_degree   = args.target_degree if args.optimise else None,
-                achieved_degree = achieved_degree)
+                power_law_fits = power_law_fits)
 
+    # ── Export graph ──────────────────────────────────────────────────────────
+    # GraphML preserves all vertex/edge attributes and is the richer format.
+    # GML is a simpler plain-text format with broader tool support (Gephi,
+    # Cytoscape, R igraph, NetworkX).  Both are written for maximum portability.
     g.write_graphml(str(out_dir / "generated_graph.graphml"))
+    g.write_gml(str(out_dir / "generated_graph.gml"))
     print(f"  Saved → generated_graph.graphml")
+    print(f"  Saved → generated_graph.gml")
 
     print(f"\nOutputs:")
     print(f"  {out_dir}/generated_network.png")
@@ -701,6 +585,7 @@ def main() -> None:
           f"({len(list(met_dir.glob('*.png')))} distribution plots)")
     print(f"  {out_dir}/summary.txt")
     print(f"  {out_dir}/generated_graph.graphml")
+    print(f"  {out_dir}/generated_graph.gml")
 
 
 if __name__ == "__main__":
