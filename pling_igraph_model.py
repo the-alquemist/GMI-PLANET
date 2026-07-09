@@ -65,6 +65,7 @@ Dependencies
 import argparse
 import math
 import random
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -89,6 +90,15 @@ from pling_igraph_analysis import (
     render_measure_distribution,
     render_path_length_distribution,
     render_combined_centrality_distribution,
+    compute_combined_centrality_axis_limits,
+)
+
+
+DEFAULT_REFERENCE_SUMMARY = (
+    Path(__file__).resolve().parent
+    / "igraph_output_pling"
+    / "igraph_metrics"
+    / "summary_community_0.txt"
 )
 
 
@@ -127,10 +137,41 @@ def parse_args() -> argparse.Namespace:
                         "(default 42)")
     p.add_argument("--out-dir", required=True,
                    help="Output directory for generated network and metrics")
+    p.add_argument("--reference-summary", type=Path,
+                   default=DEFAULT_REFERENCE_SUMMARY,
+                   help="Path to the igraph_metrics summary used to reuse the "
+                        "combined distribution axis range (default: analysis "
+                        "summary_community_0.txt)")
     p.add_argument("--dpi", type=int, default=200,
                    help="Figure resolution in dots per inch. 200 is good for "
                         "screen; use 300-600 for publication. (default 200)")
     return p.parse_args()
+
+
+def load_combined_axis_limits(reference_summary: Path) -> dict[str, float] | None:
+    """Load shared combined-plot axis limits from the analysis summary."""
+    if not reference_summary.exists():
+        return None
+
+    limits: dict[str, float] = {}
+    in_section = False
+    pattern = re.compile(r"\b(x_min|x_max|y_min|y_max)\s*=\s*([0-9.eE+-]+)")
+
+    for line in reference_summary.read_text().splitlines():
+        if line.startswith("Combined centrality distribution axis limits"):
+            in_section = True
+            continue
+        if not in_section:
+            continue
+        if not line.strip():
+            break
+        match = pattern.search(line)
+        if match:
+            limits[match.group(1)] = float(match.group(2))
+
+    if all(key in limits for key in ("x_min", "x_max", "y_min", "y_max")):
+        return limits
+    return None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -551,11 +592,19 @@ def main() -> None:
         "closeness":   closeness_centrality(g,   normalized=True),
         "eigenvector": eigenvector_centrality(g, normalized=True),
     }
+    combined_axis_limits = load_combined_axis_limits(args.reference_summary)
+    if combined_axis_limits is None:
+        combined_axis_limits = compute_combined_centrality_axis_limits(combined_vals)
+        if combined_axis_limits is not None:
+            print(f"  Combined axis limits computed locally (reference summary not found): {args.reference_summary}")
+    else:
+        print(f"  Loaded combined axis limits from {args.reference_summary}")
     render_combined_centrality_distribution(
         centrality_values = combined_vals,
         graph_label       = graph_label,
         community_idx     = 0,
         out_path          = met_dir / "combined_distribution.png",
+        axis_limits       = combined_axis_limits,
         dpi               = args.dpi,
     )
 

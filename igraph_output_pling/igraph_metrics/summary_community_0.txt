@@ -9,6 +9,13 @@ Notes
 • Local clustering coefficient is 0 for nodes with degree < 2.
 • Average path length excludes unreachable pairs (inf distances).
 
+Combined centrality distribution axis limits
+----------------------------------------
+  x_min = 1.0292486589952e-06
+  x_max = 1.02259135499036
+  y_min = 0.0133432287763601
+  y_max = 4152.05163971183
+
 ────────────────────────────────────────────────────────────
 Graph: Full graph (with hub nodes)
   Nodes : 152

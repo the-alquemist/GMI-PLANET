@@ -674,6 +674,7 @@ def render_combined_centrality_distribution(
         graph_label: str,
         community_idx: int,
         out_path: Path,
+        axis_limits: dict[str, float] | None = None,
         dpi: int = 200) -> None:
     """Single log-log panel showing the distribution of all four centrality
     measures overlaid on the same axes, using log-spaced bins.
@@ -685,6 +686,7 @@ def render_combined_centrality_distribution(
     graph_label       : e.g. "Full graph" or "No-hub graph"
     community_idx     : community number for title
     out_path          : output PNG path
+    axis_limits       : optional dictionary of axis limits
     dpi               : output resolution
     """
     # Representative colour from each colormap (evaluated at 0.75 = dark shade)
@@ -698,6 +700,8 @@ def render_combined_centrality_distribution(
     fig, ax = plt.subplots(figsize=(9, 7))
     fig.patch.set_facecolor("white")
     plotted_any = False
+    all_xs: list[float] = []
+    all_ys: list[float] = []
 
     for measure, (color, label, marker) in measure_styles.items():
         vals = centrality_values.get(measure)
@@ -732,6 +736,8 @@ def render_combined_centrality_distribution(
             continue
 
         xs, ys = zip(*pairs)
+        all_xs.extend(xs)
+        all_ys.extend(ys)
         ax.scatter(xs, ys, marker=marker, color=color, s=45, alpha=0.85,
                    label=label, zorder=3)
         # Thin connecting line to show trend
@@ -746,6 +752,9 @@ def render_combined_centrality_distribution(
 
     ax.set_xscale("log")
     ax.set_yscale("log")
+    if axis_limits is not None:
+        ax.set_xlim(axis_limits["x_min"], axis_limits["x_max"])
+        ax.set_ylim(axis_limits["y_min"], axis_limits["y_max"])
     ax.set_xlabel("Normalised centrality value  [0, 1]", fontsize=11)
     ax.set_ylabel("Probability density", fontsize=11)
     ax.tick_params(labelsize=9)
@@ -764,6 +773,72 @@ def render_combined_centrality_distribution(
     print(f"  Saved → {out_path.name}")
 
 
+def compute_combined_centrality_axis_limits(
+        centrality_values: dict[str, list]) -> dict[str, float] | None:
+    """Compute shared axis limits for the combined centrality plot.
+
+    The limits are derived from the positive x/y values produced by the same
+    binning logic used in render_combined_centrality_distribution(), so the
+    summary file can act as the shared reference for other scripts.
+    """
+    measure_styles = {
+        "degree":      (_CMAPS["degree"](0.75),     "Degree",      "o"),
+        "betweenness": (_CMAPS["betweenness"](0.75),"Betweenness", "s"),
+        "closeness":   (_CMAPS["closeness"](0.75),  "Closeness (WF)", "^"),
+        "eigenvector": (_CMAPS["eigenvector"](0.75),"Eigenvector", "D"),
+    }
+
+    all_xs: list[float] = []
+    all_ys: list[float] = []
+
+    for measure in measure_styles:
+        vals = centrality_values.get(measure)
+        if vals is None:
+            continue
+
+        positive = [v for v in vals if v > 0]
+        if len(positive) < 5:
+            continue
+        v_max = max(positive)
+        normed = [v / v_max for v in positive]
+
+        log_span = math.log10(max(normed) / min(normed))
+        if log_span < 1.0:
+            try:
+                x, y = bin_frequency(normed, logarithmic_bins=False)
+            except Exception:
+                continue
+        else:
+            try:
+                x, y = bin_frequency(normed, logarithmic_bins=True)
+            except Exception:
+                continue
+
+        pairs = [(xi, yi) for xi, yi in zip(x, y)
+                 if xi > 0 and yi > 0
+                 and not (isinstance(yi, float) and math.isnan(yi))]
+        if not pairs:
+            continue
+
+        xs, ys = zip(*pairs)
+        all_xs.extend(xs)
+        all_ys.extend(ys)
+
+    if not all_xs or not all_ys:
+        return None
+
+    pad = 1.15
+    x_min, x_max = min(all_xs), max(all_xs)
+    y_min, y_max = min(all_ys), max(all_ys)
+
+    return {
+        "x_min": max(x_min / pad, 1e-12),
+        "x_max": x_max * pad,
+        "y_min": max(y_min / pad, 1e-12),
+        "y_max": y_max * pad,
+    }
+
+
 def print_top_k(g: ig.Graph, values: list[float], measure: str,
                 graph_label: str, k: int = 10) -> None:
     """Print the top-K plasmids ranked by a centrality measure."""
@@ -780,7 +855,8 @@ def print_top_k(g: ig.Graph, values: list[float], measure: str,
 
 def write_summary(out_dir: Path, community_idx: int, graphs: list,
                   raw_results: dict, scalar_results: dict,
-                  top_k: int = 10) -> None:
+                  top_k: int = 10,
+                  combined_axis_limits: dict[str, float] | None = None) -> None:
     """Write a plain-text summary of all graph measures.
 
     Node-level measures (degree, betweenness, closeness, eigenvector,
@@ -800,6 +876,14 @@ def write_summary(out_dir: Path, community_idx: int, graphs: list,
         fh.write("  connected component; smaller-component nodes are set to 0.\n")
         fh.write("• Local clustering coefficient is 0 for nodes with degree < 2.\n")
         fh.write("• Average path length excludes unreachable pairs (inf distances).\n\n")
+
+        if combined_axis_limits is not None:
+            fh.write("Combined centrality distribution axis limits\n")
+            fh.write("----------------------------------------\n")
+            fh.write(f"  x_min = {combined_axis_limits['x_min']:.15g}\n")
+            fh.write(f"  x_max = {combined_axis_limits['x_max']:.15g}\n")
+            fh.write(f"  y_min = {combined_axis_limits['y_min']:.15g}\n")
+            fh.write(f"  y_max = {combined_axis_limits['y_max']:.15g}\n\n")
 
         for g, coords, label, suffix in graphs:
             fh.write("─" * 60 + "\n")
@@ -1086,6 +1170,12 @@ def main() -> None:
 
     # ── 7. Combined centrality distribution (1 × 1 log-log panel) ────────────
     print("\n── Combined Centrality Distribution ───────────────────────────")
+    combined_axis_inputs = {m: [] for m in ("degree", "betweenness", "closeness", "eigenvector")}
+    for suffix in ("full", "no_hubs"):
+        for measure in combined_axis_inputs:
+            combined_axis_inputs[measure].extend(norm_results[measure][suffix])
+    combined_axis_limits = compute_combined_centrality_axis_limits(combined_axis_inputs)
+
     for g, coords, label, suffix in graphs:
         combined_vals = {
             "degree":      norm_results["degree"][suffix],
@@ -1098,6 +1188,7 @@ def main() -> None:
             graph_label       = label,
             community_idx     = args.community,
             out_path          = metrics_dir / f"combined_distribution_{suffix}.png",
+            axis_limits       = combined_axis_limits,
             dpi               = args.dpi,
         )
 
@@ -1113,7 +1204,8 @@ def main() -> None:
     # ── Summary ───────────────────────────────────────────────────────────────
     # Write a plain-text summary with min/max/max-abs and top-K lists
     write_summary(out_dir, args.community, graphs, raw_results,
-                  scalar_results, top_k=args.top_k)
+                  scalar_results, top_k=args.top_k,
+                  combined_axis_limits=combined_axis_limits)
 
 if __name__ == "__main__":
     main()
