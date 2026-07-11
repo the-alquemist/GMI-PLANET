@@ -142,6 +142,13 @@ def parse_args() -> argparse.Namespace:
                    help="Path to the igraph_metrics summary used to reuse the "
                         "combined distribution axis range (default: analysis "
                         "summary_community_0.txt)")
+    p.add_argument("--misc-dir", type=Path, default=None,
+                   help="Path to the misc/ folder produced by "
+                        "pling_igraph_analysis.py (contains "
+                        "distribution_data_full.json and "
+                        "distribution_data_no_hubs.json).  When provided, "
+                        "the model generates a 2×2 comparison figure for "
+                        "each graph variant (full / no-hub).")
     p.add_argument("--dpi", type=int, default=200,
                    help="Figure resolution in dots per inch. 200 is good for "
                         "screen; use 300-600 for publication. (default 200)")
@@ -279,7 +286,7 @@ def generate_network(N: int, n0: int, p0: float,
         name   : "n0", "n1", … — unique string IDs
         is_hub : False for all (no hub concept in generated graph)
         subcom : "generated" for all (single dummy subcommunity)
-        color  : uniform "#4e9fd4"
+        color  : uniform "#8B4513"
     and generation parameters stored as graph-level attributes.
     """
     rng = random.Random(seed)
@@ -302,7 +309,7 @@ def generate_network(N: int, n0: int, p0: float,
     g.vs["name"]   = [f"n{i}" for i in range(g.vcount())]
     g.vs["is_hub"] = [False]        * g.vcount()
     g.vs["subcom"] = ["generated"]  * g.vcount()
-    g.vs["color"]  = ["#4e9fd4"]    * g.vcount()
+    g.vs["color"]  = ["#8B4513"]    * g.vcount()
 
     # Graph-level metadata for traceability
     g["N"]           = N
@@ -349,7 +356,7 @@ def fit_power_law(values: list[float], discrete: bool = False) -> tuple[float, f
 
 def render_network(g: ig.Graph, coords: np.ndarray,
                    out_path: Path, dpi: int = 200) -> None:
-    """Render the generated network: nodes coloured by degree (Blues).
+    """Render the generated network: nodes coloured by degree (YlOrBr).
 
     Uses the pre-computed FR layout coords.  Edge opacity and width scale
     with the average degree of their two endpoints so hub connections are
@@ -363,7 +370,7 @@ def render_network(g: ig.Graph, coords: np.ndarray,
     if vmax == vmin:
         vmax = vmin + 1
     norm   = Normalize(vmin=vmin, vmax=vmax)
-    cmap   = cm.Blues
+    cmap   = cm.YlOrBr
     colors = [to_hex(cmap(norm(d))) for d in degrees]
 
     fig, ax = plt.subplots(figsize=(22, 18))
@@ -401,7 +408,7 @@ def render_network(g: ig.Graph, coords: np.ndarray,
     cbar.set_label("Node degree", fontsize=11)
 
     ax.set_title(
-        f"Duplication–Divergence Plasmid Similarity Network\n"
+        f"Duplication–Divergence Adapted Plasmid Similarity Network\n"
         f"N={g['N']}  n₀={g['n0']}  σ={g['sigma']:.3f}  "
         f"p={g['p']}  ε={g['epsilon']:.4f}  "
         f"degree_bias={g['degree_bias']}  seed={g['seed']}\n"
@@ -505,6 +512,141 @@ def write_stats(g: ig.Graph, out_path: Path,
 # Main
 # ─────────────────────────────────────────────────────────────────────────────
 
+def load_distribution_data(misc_dir: Path, suffix: str) -> dict | None:
+    """Load the distribution data JSON written by pling_igraph_analysis.py.
+
+    Parameters
+    ----------
+    misc_dir : Path to the misc/ folder from the analysis run
+    suffix   : "full" or "no_hubs"
+
+    Returns
+    -------
+    dict with keys "graph_label" and "measures" (each measure has "x", "y")
+    or None if the file does not exist.
+    """
+    import json
+    path = misc_dir / f"distribution_data_{suffix}.json"
+    if not path.exists():
+        print(f"  [warn] Distribution data not found: {path}")
+        return None
+    with open(path) as fh:
+        return json.load(fh)
+
+
+# Colour palette matching render_combined_centrality_distribution in analysis.
+# Each measure gets a dark shade (analysis line) and a lighter shade (model).
+_MEASURE_LAYOUT = [
+    ("degree",      "Degree",        (0, 0)),
+    ("betweenness", "Betweenness",   (0, 1)),
+    ("closeness",   "Closeness (WF)",(1, 0)),
+    ("eigenvector", "Eigenvector",   (1, 1)),
+]
+_CMAP_KEYS = {
+    "degree":      cm.Greens,
+    "betweenness": cm.Oranges,
+    "closeness":   cm.Blues,
+    "eigenvector": cm.Purples,
+}
+
+
+def render_comparison_2x2(model_vals: dict[str, list],
+                            analysis_data: dict,
+                            original_label: str,
+                            out_path: Path,
+                            xlim: tuple = (1e-5, 1.5),
+                            dpi: int = 200) -> None:
+    """2×2 figure comparing model and original-network centrality distributions.
+
+    Each of the four cells shows one centrality measure (degree, betweenness,
+    closeness, eigenvector) with two overlaid datasets:
+
+        Solid line  — original plasmid network (from analysis export JSON)
+        Dashed line — generated duplication-divergence model (this run)
+
+    Both datasets use values normalized to [0, 1] (divided by their own max)
+    and log-spaced bins on log-log axes, exactly matching the combined
+    distribution plot so the comparison is visually consistent.
+
+    The x-axis is fixed to ``xlim`` (default [1e-5, 1.5]) on all four panels,
+    which is the same range used in render_combined_centrality_distribution(),
+    ensuring direct visual comparability with those single-panel plots.
+
+    Parameters
+    ----------
+    model_vals      : dict measure → per-node value list from the model graph
+    analysis_data   : loaded JSON dict from load_distribution_data()
+    original_label  : graph variant label, e.g. "Full graph (with hub nodes)"
+    out_path        : output PNG path
+    xlim            : fixed x-axis range (must match the analysis combined plot)
+    dpi             : output resolution
+    """
+    from pling_igraph_analysis import bin_frequency   # reuse identical binning
+
+    fig, axes = plt.subplots(2, 2, figsize=(14, 11))
+    fig.patch.set_facecolor("white")
+
+    analysis_measures = analysis_data.get("measures", {})
+
+    for measure, measure_label, (row, col) in _MEASURE_LAYOUT:
+        ax      = axes[row][col]
+        cmap    = _CMAP_KEYS[measure]
+        c_orig  = cmap(0.75)   # dark shade  — original network
+        c_model = cmap(0.45)   # medium shade — generated model
+
+        # ── Original network (from analysis export) ───────────────────────────
+        orig = analysis_measures.get(measure)
+        if orig:
+            ax.scatter(orig["x"], orig["y"], marker="o", s=28, color=c_orig,
+                       alpha=0.90, zorder=4, label="Original network")
+            ax.plot(orig["x"], orig["y"], lw=1.2, color=c_orig,
+                    alpha=0.55, zorder=3)
+
+        # ── Model network (this run) ──────────────────────────────────────────
+        vals = model_vals.get(measure)
+        if vals is not None:
+            positive = [v for v in vals if v > 0]
+            if len(positive) >= 5:
+                v_max   = max(positive)
+                normed  = [v / v_max for v in positive]
+                log_span = math.log10(max(normed) / min(normed))
+                try:
+                    x_m, y_m = bin_frequency(normed,
+                                              logarithmic_bins=(log_span >= 1.0))
+                    pairs = [(xi, yi) for xi, yi in zip(x_m, y_m)
+                             if xi > 0 and yi > 0
+                             and not (isinstance(yi, float) and math.isnan(yi))]
+                    if pairs:
+                        xs, ys = zip(*pairs)
+                        ax.scatter(xs, ys, marker="D", s=22, color=c_model,
+                                   alpha=0.90, zorder=4,
+                                   label="Generated model")
+                        ax.plot(xs, ys, lw=1.2, color=c_model,
+                                alpha=0.55, linestyle="--", zorder=3)
+                except Exception:
+                    pass
+
+        ax.set_xscale("log")
+        ax.set_yscale("log")
+        ax.set_xlim(xlim)
+        ax.set_xlabel("Normalized value  [0, 1]", fontsize=9)
+        ax.set_ylabel("Probability density",       fontsize=9)
+        ax.set_title(measure_label, fontsize=11, fontweight="bold")
+        ax.tick_params(labelsize=8)
+        ax.legend(fontsize=8, framealpha=0.85)
+
+    fig.suptitle(
+        f"Centrality distribution comparison — Original vs Generated model\n"
+        f"Original: {original_label}",
+        fontsize=13, fontweight="bold", y=1.01
+    )
+    plt.tight_layout()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(out_path, dpi=dpi, bbox_inches="tight", facecolor="white")
+    plt.close(fig)
+    print(f"  Saved → {out_path.name}")
+
+
 def main() -> None:
     args = parse_args()
 
@@ -607,6 +749,28 @@ def main() -> None:
         axis_limits       = combined_axis_limits,
         dpi               = args.dpi,
     )
+
+    # ── 2×2 comparison figures (model vs original network) ────────────────────
+    # Requires --misc-dir pointing to the misc/ folder from the analysis run.
+    # One figure per graph variant: full graph and no-hub graph.
+    # The x-axis is fixed to (1e-5, 1.5) — matching render_combined so plots
+    # can be placed side-by-side for direct visual comparison.
+    if args.misc_dir is not None:
+        for suffix, orig_label in [
+            ("full",     "Full graph (with hub nodes)"),
+            ("no_hubs",  "No-hub graph"),
+        ]:
+            analysis_data = load_distribution_data(args.misc_dir, suffix)
+            if analysis_data is None:
+                continue
+            render_comparison_2x2(
+                model_vals     = combined_vals,
+                analysis_data  = analysis_data,
+                original_label = orig_label,
+                out_path       = met_dir / f"comparison_2x2_{suffix}.png",
+                xlim           = (1e-5, 1.5),
+                dpi            = args.dpi,
+            )
 
     # Path-length histogram
     apl = average_path_length_metric(g)

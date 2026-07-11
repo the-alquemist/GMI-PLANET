@@ -839,6 +839,65 @@ def compute_combined_centrality_axis_limits(
     }
 
 
+def export_distribution_data(centrality_values: dict[str, list],
+                              graph_label: str,
+                              suffix: str,
+                              misc_dir: Path) -> None:
+    """Compute and save log-bin distribution data for the 4 main centrality
+    measures to a JSON file that the model script can load for comparison.
+
+    The stored (x, y) pairs use values normalised to [0, 1] by dividing
+    each measure by its own maximum.  This puts all measures on the same
+    x-axis scale — the same normalisation used in
+    render_combined_centrality_distribution() — so the model script can
+    overlay its own normalised distribution on the exact same scale.
+
+    Output
+    ------
+    misc_dir/distribution_data_{suffix}.json  with structure:
+        {
+          "graph_label": "Full graph (with hub nodes)",
+          "measures": {
+            "degree":      {"x": [...], "y": [...]},
+            "betweenness": {"x": [...], "y": [...]},
+            "closeness":   {"x": [...], "y": [...]},
+            "eigenvector": {"x": [...], "y": [...]}
+          }
+        }
+    """
+    export: dict = {"graph_label": graph_label, "measures": {}}
+
+    for measure in ("degree", "betweenness", "closeness", "eigenvector"):
+        vals = centrality_values.get(measure)
+        if vals is None:
+            continue
+        positive = [v for v in vals if v > 0]
+        if len(positive) < 5:
+            continue
+        v_max  = max(positive)
+        normed = [v / v_max for v in positive]
+
+        log_span = math.log10(max(normed) / min(normed))
+        try:
+            x, y = bin_frequency(normed,
+                                  logarithmic_bins=(log_span >= 1.0))
+        except Exception:
+            continue
+
+        pairs = [(xi, yi) for xi, yi in zip(x, y)
+                 if xi > 0 and yi > 0
+                 and not (isinstance(yi, float) and math.isnan(yi))]
+        if pairs:
+            xs, ys = zip(*pairs)
+            export["measures"][measure] = {"x": list(xs), "y": list(ys)}
+
+    misc_dir.mkdir(parents=True, exist_ok=True)
+    out_file = misc_dir / f"distribution_data_{suffix}.json"
+    with open(out_file, "w") as fh:
+        json.dump(export, fh, indent=2)
+    print(f"  Exported distribution data → {out_file.name}")
+
+
 def print_top_k(g: ig.Graph, values: list[float], measure: str,
                 graph_label: str, k: int = 10) -> None:
     """Print the top-K plasmids ranked by a centrality measure."""
@@ -1192,8 +1251,26 @@ def main() -> None:
             dpi               = args.dpi,
         )
 
-    # ── 8. Export graphs ──────────────────────────────────────────────────────
-    print("\n── Exporting graphs ───────────────────────────────────────────")
+    # ── 8. Export distribution data for model comparison (misc folder) ───────
+    # Saves normalised log-bin (x, y) pairs for each graph variant so that
+    # pling_igraph_model.py can load them and overlay the generated-network
+    # distributions for a direct side-by-side comparison.
+    print("\n── Exporting distribution data for model comparison ───────────")
+    misc_dir = out_dir / "misc"
+    for g, coords, label, suffix in graphs:
+        export_distribution_data(
+            centrality_values={
+                "degree":      norm_results["degree"][suffix],
+                "betweenness": norm_results["betweenness"][suffix],
+                "closeness":   norm_results["closeness"][suffix],
+                "eigenvector": norm_results["eigenvector"][suffix],
+            },
+            graph_label = label,
+            suffix      = suffix,
+            misc_dir    = misc_dir,
+        )
+
+    # ── 9. Export graphs ──────────────────────────────────────────────────────    print("\n── Exporting graphs ───────────────────────────────────────────")
     for g, _, label, suffix in graphs:
         for fmt, writer in [("graphml", g.write_graphml),
                              ("gml",     g.write_gml)]:

@@ -1,6 +1,6 @@
 =================================================================
   DUPLICATION–DIVERGENCE NETWORK  —  STATISTICS
-  Generated: 2026-07-09 17:54:58
+  Generated: 2026-07-10 23:07:42
 =================================================================
 
 ── Generation parameters ──────────────────────────────────
@@ -12,28 +12,28 @@
   ε (novel edges)           : 0.01
   degree_bias               : True
   seed                      : 42
-  duplication attempts      : 213
+  duplication attempts      : 210
 
 ── Graph structure ─────────────────────────────────────────
   Nodes               : 200
-  Edges               : 676
-  Density             : 0.03397
+  Edges               : 651
+  Density             : 0.03271
   Connected components: 1
 
 ── Degree distribution ─────────────────────────────────────
   min         : 1
-  max         : 29
-  mean        : 6.7600
-  std         : 4.7247
-  Degree power-law fit     : alpha=3.5159, xmin=8.0000
-  Betweenness power-law fit     : alpha=2.1675, xmin=118.7142
-  Closeness power-law fit     : alpha=15.5955, xmin=0.0018
-  Eigenvector power-law fit     : alpha=3.4866, xmin=0.2419
+  max         : 33
+  mean        : 6.5100
+  std         : 4.6787
+  Degree power-law fit     : alpha=3.0832, xmin=6.0000
+  Betweenness power-law fit     : alpha=3.0574, xmin=449.7201
+  Closeness power-law fit     : alpha=11.6616, xmin=0.0016
+  Eigenvector power-law fit     : alpha=3.2951, xmin=0.2184
 
 ── Topology ────────────────────────────────────────────────
-  Global clustering (transitivity) : 0.06905
-  Mean local clustering coeff.     : 0.05506
-  Average path length              : 3.0342
+  Global clustering (transitivity) : 0.07895
+  Mean local clustering coeff.     : 0.07317
+  Average path length              : 3.0866
 ── Model note ──────────────────────────────────────────────
   σ controls graph density (mean degree) reliably:
     σ↑ → more edges inherited → higher mean degree
